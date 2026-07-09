@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Common Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Entity Validations
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'category', 'price', 'isReady']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.category in ['Coffee', 'Non-Coffee', 'Food', 'Snack', 'Pastry'] &&
+             data.price is number && data.price >= 0 &&
+             data.isReady is bool;
+    }
+
+    function isValidDiscount(data) {
+      return data.keys().hasAll(['name', 'value', 'type', 'startDate', 'endDate']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.value is number && data.value >= 0 &&
+             data.type in ['percentage', 'fixed'] &&
+             data.startDate is string && data.endDate is string;
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['timestamp', 'items', 'subtotal', 'discountAmount', 'tax', 'total', 'paymentMethod', 'userName', 'customerName']) &&
+             data.items is list && data.items.size() > 0 &&
+             data.subtotal is number && data.total is number;
+    }
+
+    function isValidLog(data) {
+      return data.keys().hasAll(['productId', 'productName', 'change', 'reason', 'timestamp']) &&
+             data.productId is string && data.change is number;
+    }
+
+    function isValidPaymentMethod(data) {
+      return data.keys().hasAll(['name', 'type', 'isActive']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['cash', 'non-cash'] &&
+             data.isActive is bool;
+    }
+
+    function isValidCafeSettings(data) {
+      return data.keys().hasAll(['name', 'logoUrl', 'primaryColor', 'secondaryColor', 'address', 'phone', 'currency', 'taxRate']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.logoUrl is string &&
+             data.primaryColor is string &&
+             data.secondaryColor is string &&
+             data.address is string &&
+             data.phone is string &&
+             data.currency is string &&
+             data.taxRate is number;
+    }
+
+    // 3. Multi-User Subcollection Rules
+    match /users/{userId} {
+      // Profile doc access
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // All subcollections and nested documents
+      match /{allPaths=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
