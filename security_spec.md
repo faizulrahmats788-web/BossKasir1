@@ -26,4 +26,4 @@
 - `isAdmin()`: Check if user is an admin.
 - `isCashier()`: Check if user is a cashier.
 
-*Note: Since we are using a custom login system for now, we will allow read/write for authenticated users, but in a real app, we would sync the custom login with Firebase Auth.*
+*Note: Since we are using a custom login system for now, we will allow read/write for authenticated users.*
