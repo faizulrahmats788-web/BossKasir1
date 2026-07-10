@@ -189,6 +189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(INITIAL_PAYMENT_METHODS);
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [otpPending, setOtpPending] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [dbWarning, setDbWarning] = useState<string | null>(null);
   const [fetchTrigger, setFetchTrigger] = useState(0);
@@ -238,7 +239,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Periodic active session monitor (Every 10 seconds, checks if another login force logout)
   useEffect(() => {
-    if (!user || !sessionToken) return;
+    if (!user || !sessionToken || otpPending) return;
 
     const interval = setInterval(async () => {
       try {
@@ -268,7 +269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [user?.id, sessionToken, deviceId]);
+  }, [user?.id, sessionToken, deviceId, otpPending]);
 
   // Sync state changes to localStorage
   useEffect(() => {
@@ -306,7 +307,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Initial Supabase Auth check & Session Restoration
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
+      if (session && !otpPending) {
         handleUser(session.user);
       } else {
         setUser(null);
@@ -315,16 +316,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
+      if (session && !otpPending) {
         handleUser(session.user);
-      } else {
+      } else if (!session) {
         setUser(null);
         setIsLoading(false);
       }
     });
     
     return () => subscription.unsubscribe();
-  }, []);
+  }, [otpPending]);
 
   const handleUser = async (authUser: any) => {
     try {
@@ -710,6 +711,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // Password BENAR, sign out segera untuk OTP
+      setOtpPending(true);
       await supabase.auth.signOut();
 
       // 3. Generate & Kirim OTP manual via backend
@@ -757,6 +759,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // Backend returns the real Supabase session, so we set it
+      setOtpPending(false);
       if (resData.session) {
         await supabase.auth.setSession(resData.session);
         setUser(resData.session.user);
@@ -773,6 +776,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsLoading(false);
       return true;
     } catch (error: any) {
+      setOtpPending(false);
       console.error("Login verification failed:", error);
       setAuthError(error.message || "Verifikasi OTP Gagal.");
       setIsLoading(false);
