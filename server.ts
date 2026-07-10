@@ -366,13 +366,13 @@ async function startServer() {
         };
         
         // Try inserting first
-        const { error: insertErr } = await supabaseService.from("otp_codes").insert(insertData);
+        const { error: insertErr } = await supabaseService.from("otps").insert(insertData);
         
         if (!insertErr) {
           savedToDb = true;
         } else if (insertErr.code === '23505') {
             // Already exists, update instead
-            const { error: updateErr } = await supabaseService.from("otp_codes").update(insertData).eq('email', emailClean);
+            const { error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean);
             if (!updateErr) {
                 savedToDb = true;
             } else {
@@ -439,7 +439,7 @@ async function startServer() {
       // Try database validation first
       try {
         const { data: dbOtps, error: fetchErr } = await supabaseService
-          .from("otp_codes")
+          .from("otps")
           .select("*")
           .eq("email", emailClean)
           .order("created_at", { ascending: false });
