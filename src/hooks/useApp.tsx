@@ -18,9 +18,9 @@ interface AppContextType {
   dbWarning: string | null;
   theme: 'light' | 'dark';
   
-  login: (username: string, email: string, password?: string) => Promise<boolean>;
+  login: (username: string, email: string, password?: string) => Promise<{success: boolean, error?: string, otpSent?: boolean}>;
   loginVerifyOtp: (username: string, email: string, otp: string, password?: string) => Promise<boolean>;
-  register: (username: string, password?: string, name?: string, role?: 'admin' | 'cashier') => Promise<boolean>;
+  register: (username: string, password?: string, email?: string) => Promise<{success: boolean, error?: string}>;
   sendOtp: (username: string, email: string) => Promise<void>;
   logout: () => void;
   clearAuthError: () => void;
@@ -631,7 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!username || !email || !password) {
       setAuthError("Username, email, dan password wajib diisi");
       setIsLoading(false);
-      return false;
+      return { success: false, error: "Username, email, dan password wajib diisi" };
     }
 
     try {
@@ -647,14 +647,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!checkRes.ok) {
          setAuthError("Gagal memeriksa ketersediaan pendaftaran.");
          setIsLoading(false);
-         return false;
+         return { success: false, error: "Gagal memeriksa ketersediaan pendaftaran." };
       }
       
       const checkData = await checkRes.json();
       if (checkData.available === false) {
          setAuthError(checkData.reason || "Pendaftaran tidak dapat dilanjutkan.");
          setIsLoading(false);
-         return false;
+         return { success: false, error: checkData.reason || "Pendaftaran tidak dapat dilanjutkan." };
       }
       
       // 2. signUp menggunakan email dan password
@@ -703,12 +703,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       setIsLoading(false);
-      return true;
+      return { success: true };
     } catch (error: any) {
       console.error("Registration initiation error:", error);
-      setAuthError(error.message || "Gagal mendaftar.");
+      const msg = error.message || "Gagal mendaftar.";
+      setAuthError(msg);
       setIsLoading(false);
-      return false;
+      return { success: false, error: msg };
     }
   };
 
@@ -723,7 +724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!password) {
         setAuthError("Password wajib diisi.");
         setIsLoading(false);
-        return false;
+        return { success: false, error: "Password wajib diisi." };
       }
 
       // Directly call the backend to initiate login/OTP
@@ -736,17 +737,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!res.ok) {
         setAuthError(resData.error || "Gagal mengirimkan OTP.");
         setIsLoading(false);
-        return false;
+        return { success: false, error: resData.error || "Gagal mengirimkan OTP." };
       }
 
       setOtpPending(true);
       setIsLoading(false);
-      return true; // Perlu verifikasi OTP
+      return { success: true, otpSent: true }; // Perlu verifikasi OTP
     } catch (error: any) {
       console.error("Login initiation error:", error);
       setAuthError(error.message || "Gagal memproses login.");
       setIsLoading(false);
-      return false;
+      return { success: false, error: error.message || "Gagal memproses login." };
     }
   };
 

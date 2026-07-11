@@ -203,7 +203,7 @@ async function startServer() {
       const { data: existingUsername } = await supabaseService
         .from("profiles")
         .select("id")
-        .eq("username", usernameClean)
+        .ilike("username", usernameClean)
         .maybeSingle();
 
       if (existingUsername) {
@@ -265,7 +265,7 @@ async function startServer() {
         const { data: { users }, error: usersError } = await supabaseService.auth.admin.listUsers();
         
         if (!usersError && users) {
-          const user = users.find(u => u.email === emailClean);
+          const user = (users as any[]).find(u => u.email === emailClean);
           if (user) {
             if (user.user_metadata?.username) {
               username = user.user_metadata.username;
@@ -341,7 +341,7 @@ async function startServer() {
       const { data: profileByUsername } = await supabaseService
         .from("profiles")
         .select("*")
-        .eq("username", usernameClean)
+        .ilike("username", usernameClean)
         .maybeSingle();
 
       let profile = profileByEmail || profileByUsername;

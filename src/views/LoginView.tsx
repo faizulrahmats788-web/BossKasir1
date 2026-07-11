@@ -45,6 +45,7 @@ const LoginView: React.FC = () => {
 
   useEffect(() => {
     // Only clear on initial load if needed, but not on error
+    clearAuthError();
   }, []);
 
   // 60-Second Resend Cooldown Management
@@ -167,14 +168,12 @@ const LoginView: React.FC = () => {
         return;
       }
       
-      const success = await register(username, password, email);
-      if (success) {
+      const res = await register(username, password, email);
+      if (res.success) {
         setMessage('Kode OTP telah dikirim ke email Anda.');
         window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=signup`;
-      } else if (authError) {
-        setError(authError);
       } else {
-        setError('Gagal mendaftar akun baru.');
+        setError(res.error || 'Gagal mendaftar akun baru.');
       }
     } else {
       if (!username || !email || !password) {
@@ -210,6 +209,7 @@ const LoginView: React.FC = () => {
 
         if (data.success && data.otpSent) {
           console.log("Navigating to verify-otp");
+          sessionStorage.setItem('temp_pwd', password);
           window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=login`;
         } else {
           throw new Error(data.error || 'Gagal mengirim OTP.');
