@@ -9,6 +9,20 @@ export default async function handler(req: any, res: any) {
         return res.status(405).json({ error: "Method Not Allowed" });
     }
 
+    // 1. Validasi Environment Variables
+    const requiredEnv = [
+      "VITE_SUPABASE_URL", 
+      "VITE_SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SMTP_HOST",
+      "SMTP_USER",
+      "SMTP_PASS"
+    ];
+    const missing = requiredEnv.filter(env => !process.env[env]);
+    if (missing.length > 0) {
+      return res.status(500).json({ error: "Environment variable belum lengkap", missing });
+    }
+
     const { username, email, password } = req.body;
 
     if (!username || !email || !password) {

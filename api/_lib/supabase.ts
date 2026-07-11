@@ -1,9 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
 
-dotenv.config();
-
-const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+const supabaseUrl = (process.env.VITE_SUPABASE_URL || "").replace(/\/rest\/v1|\/auth\/v1$/, "");
 const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").replace(/^["']|["']$/g, "");
 
 if (!supabaseUrl || !supabaseServiceRoleKey) {

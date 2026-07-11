@@ -29,6 +29,7 @@ const LoginView: React.FC = () => {
   // Regular Login multi-step states
   const [isLoginOtpStep, setIsLoginOtpStep] = useState(false);
   const [loginOtp, setLoginOtp] = useState('');
+  const [localIsLoading, setLocalIsLoading] = useState(false); // Add local loading state
 
   // Sesi inputs
   const [username, setUsername] = useState('');
@@ -39,11 +40,11 @@ const LoginView: React.FC = () => {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // Use local loading state to avoid overwriting global app loading
+  const isLoadingFinal = localIsLoading || isLoading;
+
   useEffect(() => {
-    setUsername('');
-    setEmail('');
-    setPassword('');
-    clearAuthError();
+    // Only clear on initial load if needed, but not on error
   }, []);
 
   // 60-Second Resend Cooldown Management
@@ -181,15 +182,42 @@ const LoginView: React.FC = () => {
         return;
       }
 
-      // Initiate login (which triggers OTP send)
-      const otpRequired = await login(username, email, password);
-      if (otpRequired) {
-        sessionStorage.setItem('temp_pwd', password);
-        window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=login`;
-      } else if (authError) {
-        setError(authError);
-      } else {
-        setError('Kredensial atau Password salah.');
+      setLocalIsLoading(true);
+      setError('');
+      console.log("Submitting login payload:", { username, email }); // No password in log
+
+      try {
+        const res = await fetch('/api/auth/login-initiate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, email, password })
+        });
+        
+        const resText = await res.text();
+        console.log("Response Status:", res.status);
+        console.log("Response Body:", resText);
+        
+        let data;
+        try {
+          data = JSON.parse(resText);
+        } catch (err) {
+          throw new Error(`Server returned invalid JSON. Status: ${res.status}`);
+        }
+        
+        if (!res.ok) {
+          throw new Error(data.error || 'Login gagal.');
+        }
+
+        if (data.success && data.otpSent) {
+          console.log("Navigating to verify-otp");
+          window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=login`;
+        } else {
+          throw new Error(data.error || 'Gagal mengirim OTP.');
+        }
+      } catch (err: any) {
+        console.error("Login Error:", err);
+        setError(err.message || 'Terjadi kesalahan saat memproses login.');
+        setLocalIsLoading(false);
       }
     }
   };
@@ -364,10 +392,10 @@ const LoginView: React.FC = () => {
 
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoadingFinal}
             className="w-full bg-coffee-800 hover:bg-coffee-900 disabled:opacity-50 disabled:cursor-not-allowed text-cream-50 py-4 mt-2 rounded-2xl font-black text-sm tracking-widest transition-all flex items-center justify-center gap-3 shadow-lg shadow-coffee-800/20 active:scale-95"
           >
-            {isLoading 
+            {isLoadingFinal 
               ? 'MEMPROSES...' 
               : isForgotPassword 
                 ? 'KIRIM RESET LINK'
