@@ -189,7 +189,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(INITIAL_PAYMENT_METHODS);
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [otpPending, setOtpPending] = useState(false);
+  const [otpPending, setOtpPending] = useState<boolean>(() => {
+    return localStorage.getItem('pos_otp_pending') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pos_otp_pending', otpPending.toString());
+  }, [otpPending]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [dbWarning, setDbWarning] = useState<string | null>(null);
   const [fetchTrigger, setFetchTrigger] = useState(0);
@@ -803,9 +809,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Clear local storage
     const keysToClear = [
       'pos_user', 'pos_session_token', 'pos_products', 'pos_discounts', 
-      'pos_sales', 'pos_inventory_logs', 'pos_settings', 'pos_payment_methods', 'pos_theme'
+      'pos_sales', 'pos_inventory_logs', 'pos_settings', 'pos_payment_methods', 'pos_theme', 'pos_otp_pending'
     ];
     keysToClear.forEach(key => localStorage.removeItem(key));
+    setOtpPending(false);
   };
 
   const clearAuthError = () => setAuthError(null);
