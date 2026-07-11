@@ -46,17 +46,21 @@ export default async function handler(req: any, res: any) {
             .maybeSingle();
 
         const profile = profileByEmail || profileByUsername;
+        const emailToUse = profile?.email || emailClean;
         
         const supabaseAnon = createClient(process.env.VITE_SUPABASE_URL!, process.env.VITE_SUPABASE_ANON_KEY!);
 
         const { data: authData, error: authError } = await supabaseAnon.auth.signInWithPassword({
-            email: emailClean,
+            email: emailToUse,
             password: password,
         });
 
         if (authError || !authData.user) {
             return res.status(401).json({ error: `Password atau Email yang Anda masukkan tidak cocok.` });
         }
+        
+        // Sign out to clear any session before OTP verification
+        await supabaseAnon.auth.signOut();
 
         const generatedOtp = crypto.randomInt ? crypto.randomInt(100000, 1000000).toString() : Math.floor(100000 + Math.random() * 900000).toString();
         const otpHash = hashString(generatedOtp);
@@ -66,14 +70,14 @@ export default async function handler(req: any, res: any) {
 
         const { error: insertErr } = await supabaseService.from("otps").insert({
             email: emailClean,
-            otp_code: otpHash,
+            otp: otpHash,
             expires_at: expiredAt.toISOString(),
             user_id: targetUserId,
         });
         
         if (insertErr && insertErr.code === '23505') {
             await supabaseService.from("otps").update({
-                otp_code: otpHash,
+                otp: otpHash,
                 expires_at: expiredAt.toISOString(),
             }).eq('email', emailClean);
         }

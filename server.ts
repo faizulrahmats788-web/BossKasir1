@@ -283,7 +283,7 @@ async function startServer() {
     const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
     const { username, email, password } = req.body;
 
-    if (!checkRateLimit(Array.isArray(clientIp) ? clientIp[0] : clientIp, 15, 60 * 1000)) {
+    if (!checkRateLimit(Array.isArray(clientIp) ? clientIp[0] : clientIp, 50, 60 * 1000)) {
        return res.status(429).json({ error: "Terlalu banyak permintaan login. Harap tunggu beberapa saat." });
     }
 
@@ -329,7 +329,7 @@ async function startServer() {
 
       try {
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email: emailClean,
+          email: profile?.email || emailClean,
           password: password,
         });
 
@@ -348,6 +348,9 @@ async function startServer() {
         return res.status(401).json({ error: `Password atau Email yang Anda masukkan tidak cocok.` });
       }
 
+      // Sign out to clear any session before OTP verification
+      await supabase.auth.signOut();
+
       // Step C: Generate secure OTP
       const generatedOtp = crypto.randomInt ? crypto.randomInt(100000, 1000000).toString() : Math.floor(100000 + Math.random() * 900000).toString();
       const otpHash = hashString(generatedOtp);
@@ -360,9 +363,8 @@ async function startServer() {
       try {
         const insertData: any = {
           email: emailClean,
-          otp_code: otpHash,
+          otp: otpHash,
           expires_at: expiredAt.toISOString(),
-          user_id: targetUserId,
         };
         
         // Try inserting first
@@ -448,9 +450,9 @@ async function startServer() {
           console.log("DEBUG: Checking DB OTP for email:", emailClean, "Found", dbOtps.length, "OTP entries");
           console.log("DEBUG: All stored OTP entries for", emailClean, ":", JSON.stringify(dbOtps));
           const matchingOtp = dbOtps.find(x => {
-            const isMatch = x.otp_code === incomingHash;
+            const isMatch = x.otp === incomingHash;
             const isNotExpired = new Date() < new Date(x.expires_at);
-            console.log(`DEBUG: OTP check: hashMatch=${isMatch}, notExpired=${isNotExpired}, storedOtp=${x.otp_code}, incomingHash=${incomingHash}, expiresAt=${x.expires_at}`);
+            console.log(`DEBUG: OTP check: hashMatch=${isMatch}, notExpired=${isNotExpired}, storedOtp=${x.otp}, incomingHash=${incomingHash}, expiresAt=${x.expires_at}`);
             return isMatch && isNotExpired;
           });
           if (matchingOtp) {
@@ -495,18 +497,6 @@ async function startServer() {
 
       if (userIdFinal) {
         await supabaseService.auth.admin.updateUserById(userIdFinal, { email_confirm: true });
-      }
-
-      // Perform real Supabase Sign-in again to acquire the auth session for frontend
-      let supabaseSession: any = null;
-      try {
-        const { data: sData } = await supabase.auth.signInWithPassword({
-          email: emailClean,
-          password: password || "default123",
-        });
-        supabaseSession = sData?.session || null;
-      } catch (e) {
-        console.warn("Standard auth login failed, using direct payload injection:", e);
       }
 
       // === SINGLE DEVICE LOGIN LOGIC (Hanya 1 Akun aktif di 1 Device) ===
@@ -569,7 +559,6 @@ async function startServer() {
           name: emailClean.split("@")[0],
           role: "admin"
         },
-        session: supabaseSession,
         message: "Login berhasil terverifikasi."
       });
 

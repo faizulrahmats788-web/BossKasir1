@@ -99,16 +99,15 @@ const VerifyOtpView: React.FC = () => {
       }
 
       if (success) {
+        console.log('OTP Verification successful');
         sessionStorage.removeItem('temp_pwd');
         setMessage('Verifikasi berhasil! Mengarahkan...');
         setTimeout(() => {
+          console.log('Redirecting to dashboard');
           window.location.href = '/';
         }, 1000);
       } else if (type === 'login') {
-         // loginVerifyOtp handles its own error setting via authError context, 
-         // but since VerifyOtpView uses local error state, we should get the error from context
-         // Actually, if it failed, useApp sets authError, we can just rely on the return false
-         // and we can set a generic error if the local state needs it
+         console.log('OTP Verification failed');
          setError("Verifikasi OTP gagal. Silakan coba lagi.");
       }
     } catch (err: any) {

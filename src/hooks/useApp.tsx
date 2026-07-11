@@ -312,9 +312,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Initial Supabase Auth check & Session Restoration
   useEffect(() => {
+    const localToken = localStorage.getItem('pos_session_token');
+    
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session && !otpPending) {
         handleUser(session.user);
+      } else if (localToken) {
+        // Keep the user if we have a local session token, even if Supabase session is null
+        setIsLoading(false);
       } else {
         setUser(null);
         setIsLoading(false);
@@ -324,7 +329,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session && !otpPending) {
         handleUser(session.user);
-      } else if (!session) {
+      } else if (!session && !localToken) {
         setUser(null);
         setIsLoading(false);
       }
@@ -404,7 +409,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabase.from('discounts').select('*').eq('user_id', user.id),
           supabase.from('sales').select('*, sale_items(*)').eq('user_id', user.id).order('created_at', { ascending: false }).limit(100),
           supabase.from('inventory_logs').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(100),
-          supabase.from('cafe_settings').select('*').eq('user_id', user.id).single(),
+          supabase.from('cafe_settings').select('*').eq('user_id', user.id).maybeSingle(),
           supabase.from('payment_methods').select('*').eq('user_id', user.id)
         ]);
         
@@ -479,8 +484,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           localStorage.setItem('pos_inventory_logs', JSON.stringify(mappedLogs));
         }
 
-        if (sSetRes.data) {
-          const s = sSetRes.data;
+        let settingsData = sSetRes.data;
+        if (!settingsData) {
+          const { data: inserted, error: insertError } = await supabase.from('cafe_settings').insert({
+            user_id: user.id,
+            name: "My Cafe",
+            address: "",
+            phone: "",
+            logo_url: null,
+            tax_rate: 0,
+            currency: "IDR"
+          }).select().maybeSingle();
+          if (!insertError && inserted) {
+            settingsData = inserted;
+          }
+        }
+
+        if (settingsData) {
+          const s = settingsData;
           const mappedSettings: CafeSettings = {
             id: 'current',
             name: s.name,
@@ -618,7 +639,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .from("profiles")
         .select("id, email_confirmed_at")
         .eq("email", emailValue)
-        .single();
+        .maybeSingle();
       
       if (existingUser?.email_confirmed_at) {
         setAuthError("Email ini sudah terdaftar. Silakan login.");
@@ -647,6 +668,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           email: emailValue,
           name: username,
           role: 'admin'
+        });
+        
+        await supabase.from('cafe_settings').insert({
+          user_id: data.user.id,
+          name: "My Cafe",
+          address: "",
+          phone: "",
+          logo_url: null,
+          tax_rate: 0,
+          currency: "IDR"
         });
         if (profileError) {
           console.error("Gagal membuat profil user:", profileError);
@@ -725,9 +756,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Backend returns the real Supabase session, so we set it
       setOtpPending(false);
+      
+      console.log('OTP Verify response:', resData);
+
+      if (resData.sessionToken) {
+        console.log('Setting sessionToken:', resData.sessionToken);
+        setSessionToken(resData.sessionToken);
+      }
+
       if (resData.session) {
         await supabase.auth.setSession(resData.session);
         setUser(resData.session.user);
+        console.log('Set user from session:', resData.session.user);
+      } else if (resData.user) {
+        // If backend doesn't return session, but returns user, use it
+        setUser(resData.user);
+        console.log('Set user from resData.user:', resData.user);
       } else {
         // Fallback: If backend doesn't return session, we use signInWithPassword
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -736,7 +780,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (error) throw error;
         setUser(data.user as any);
+        console.log('Set user from fallback signInWithPassword:', data.user);
       }
+      
+      console.log('Auth state after loginVerifyOtp:', { user: resData.user || 'no-user', sessionToken: resData.sessionToken || 'no-token' });
       
       setIsLoading(false);
       return true;

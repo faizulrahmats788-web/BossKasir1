@@ -37,7 +37,7 @@ export default async function handler(req: any, res: any) {
         let targetUserId: string | null = null;
 
         if (!fetchErr && dbOtps && dbOtps.length > 0) {
-            const matchingOtp = dbOtps.find(x => x.otp_code === incomingHash && new Date() < new Date(x.expires_at));
+            const matchingOtp = dbOtps.find(x => x.otp === incomingHash && new Date() < new Date(x.expires_at));
             if (matchingOtp) {
                 isValidOtp = true;
                 targetUserId = matchingOtp.user_id;
