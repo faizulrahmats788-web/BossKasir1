@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
-import { supabaseService } from '../_lib/supabase';
-import { hashString } from '../_lib/utils';
-import { sendOtpHtmlEmail } from '../_lib/email';
+import { supabaseService } from '../_lib/supabase.js';
+import { hashString } from '../_lib/utils.js';
+import { sendOtpHtmlEmail } from '../_lib/email.js';
 import crypto from "crypto";
 
 export default async function handler(req: any, res: any) {

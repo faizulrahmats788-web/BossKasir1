@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
-import { supabaseService } from '../_lib/supabase';
-import { hashString } from '../_lib/utils';
+import { supabaseService } from '../_lib/supabase.js';
+import { hashString } from '../_lib/utils.js';
 
 export default async function handler(req: any, res: any) {
     if (req.method !== 'POST') return res.status(405).json({ error: "Method Not Allowed" });

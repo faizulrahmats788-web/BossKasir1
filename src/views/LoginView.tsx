@@ -221,7 +221,7 @@ const LoginView: React.FC = () => {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <AnimatePresence mode="wait">
             {/* Lupa Password Form */}
             {isForgotPassword && (
@@ -240,6 +240,8 @@ const LoginView: React.FC = () => {
                   <input
                     type="email"
                     value={email}
+                    name="bosskasir_login_email"
+                    autoComplete="off"
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="budi@gmail.com"
                     className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
@@ -265,6 +267,8 @@ const LoginView: React.FC = () => {
                   <input
                     type="email"
                     value={email}
+                    name="bosskasir_login_email"
+                    autoComplete="off"
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="budi@gmail.com"
                     className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
@@ -288,6 +292,8 @@ const LoginView: React.FC = () => {
                     <input
                       type="text"
                       value={username}
+                      name="bosskasir_login_username"
+                      autoComplete="off"
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder="Username_kamu"
                       className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
@@ -298,6 +304,8 @@ const LoginView: React.FC = () => {
                     <input
                       type="email"
                       value={email}
+                      name="bosskasir_login_email"
+                      autoComplete="off"
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="budi@gmail.com"
                       className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
@@ -308,6 +316,8 @@ const LoginView: React.FC = () => {
                     <input
                       type="password"
                       value={password}
+                      name="bosskasir_login_password"
+                      autoComplete="new-password"
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
                       className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
