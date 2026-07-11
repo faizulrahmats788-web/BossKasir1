@@ -251,8 +251,7 @@ async function startServer() {
         .select("username")
         .eq("email", emailClean);
 
-      console.log("DEBUG: Query Result - Data:", profiles, "Error:", queryError);
-
+      
       if (queryError) {
         console.error("DEBUG: Query Error:", queryError);
         return res.status(500).json({ error: "Terjadi kesalahan pada database." });
