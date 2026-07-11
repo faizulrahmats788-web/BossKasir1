@@ -39,6 +39,13 @@ const LoginView: React.FC = () => {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  useEffect(() => {
+    setUsername('');
+    setEmail('');
+    setPassword('');
+    clearAuthError();
+  }, []);
+
   // 60-Second Resend Cooldown Management
   const [resendCooldown, setResendCooldown] = useState(0);
 

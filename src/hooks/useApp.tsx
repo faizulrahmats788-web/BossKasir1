@@ -678,53 +678,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return false;
       }
 
-      // 1. Cek apakah user ada (cari by username atau email)
-      const { data: userByUsernameOrEmail, error: findError } = await supabase
-        .from("profiles")
-        .select("id, email, username")
-        .or(`username.eq.${usernameClean},email.eq.${emailClean}`)
-        .maybeSingle();
-      
-      if (findError) {
-        setAuthError("Gagal memeriksa data user.");
-        setIsLoading(false);
-        return false;
-      }
-
-      if (!userByUsernameOrEmail) {
-        setAuthError("Username atau Email tidak terdaftar.");
-        setIsLoading(false);
-        return false;
-      }
-
-      // Gunakan email dari database untuk memastikan konsistensi
-      const userEmail = userByUsernameOrEmail.email;
-
-      // 2. Validasi password menggunakan Supabase Auth
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: userEmail,
-        password: password,
-      });
-
-      if (signInError) {
-        if (signInError.message.includes("Invalid login credentials")) {
-          setAuthError("Password salah.");
-        } else {
-          setAuthError("Gagal login: " + signInError.message);
-        }
-        setIsLoading(false);
-        return false;
-      }
-
-      // Password BENAR, sign out segera untuk OTP
-      setOtpPending(true);
-      await supabase.auth.signOut();
-
-      // 3. Generate & Kirim OTP manual via backend
+      // Directly call the backend to initiate login/OTP
       const { res, data: resData } = await fetchApiJson('/api/auth/login-initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: userByUsernameOrEmail.username, email: userEmail, password })
+        body: JSON.stringify({ username: usernameClean, email: emailClean, password })
       });
       
       if (!res.ok) {
@@ -733,6 +691,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return false;
       }
 
+      setOtpPending(true);
       setIsLoading(false);
       return true; // Perlu verifikasi OTP
     } catch (error: any) {
