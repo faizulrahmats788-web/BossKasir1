@@ -18,7 +18,7 @@ interface AppContextType {
   dbWarning: string | null;
   theme: 'light' | 'dark';
   
-  login: (username: string, email: string, password?: string) => Promise<{success: boolean, error?: string, otpSent?: boolean}>;
+  login: (identifier: string, password?: string) => Promise<{success: boolean, error?: string}>;
   loginVerifyOtp: (username: string, email: string, otp: string, password?: string) => Promise<boolean>;
   register: (username: string, password?: string, email?: string) => Promise<{success: boolean, error?: string}>;
   sendOtp: (username: string, email: string) => Promise<void>;
@@ -243,42 +243,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [sessionToken]);
 
-  // Periodic active session monitor (Every 10 seconds, checks if another login force logout)
-  useEffect(() => {
-    if (!user || !sessionToken || otpPending) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const { res, data } = await fetchApiJson('/api/auth/session-check', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: user.id,
-            sessionToken,
-            deviceId
-          })
-        });
-
-        if (res.ok) {
-          if (data.valid === false) {
-            console.warn("Session invalidated globally. Forcing user logout:", data.reason);
-            // Invalidate session values locally to force a logout screen
-            setSessionToken(null);
-            setUser(null);
-            setCart([]);
-            setAuthError(data.reason ? `Sesi tidak valid: ${data.reason}` : "Sesi Anda dinonaktifkan karena login terdeteksi dari perangkat lain.");
-            localStorage.removeItem('pos_session_token');
-            localStorage.removeItem('currentUser');
-            localStorage.removeItem('otpVerified');
-          }
-        }
-      } catch (err) {
-        console.warn("Session connectivity check failed. Allowing local POS execution offline:", err);
-      }
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [user?.id, sessionToken, deviceId, otpPending]);
+  // No custom periodic session check or deviceId limit checking is performed.
 
   // Sync state changes to localStorage
   useEffect(() => {
@@ -316,13 +281,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Initial Supabase Auth check & Session Restoration
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      const currentToken = localStorage.getItem('pos_session_token');
-      const savedUser = localStorage.getItem('pos_user');
-      if (session && !otpPending) {
+      if (session) {
         handleUser(session.user);
-      } else if (currentToken || savedUser) {
-        // Keep the user if we have a local session token or cached user details
-        setIsLoading(false);
       } else {
         setUser(null);
         setIsLoading(false);
@@ -330,18 +290,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const currentToken = localStorage.getItem('pos_session_token');
-      const savedUser = localStorage.getItem('pos_user');
-      if (session && !otpPending) {
+      if (session) {
         handleUser(session.user);
-      } else if (!session && !currentToken && !savedUser) {
+      } else {
         setUser(null);
         setIsLoading(false);
       }
     });
     
     return () => subscription.unsubscribe();
-  }, [otpPending]);
+  }, []);
 
   const handleUser = async (authUser: any) => {
     try {
@@ -715,41 +673,102 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const login = async (username: string, email: string, password?: string) => {
+  const login = async (identifier: string, password?: string) => {
     setAuthError(null);
     setIsLoading(true);
 
     try {
-      const emailClean = email.toLowerCase().trim();
-      const usernameClean = username.toLowerCase().trim();
-      
+      if (!identifier) {
+        setAuthError("Username atau Email wajib diisi.");
+        setIsLoading(false);
+        return { success: false, error: "Username atau Email wajib diisi." };
+      }
       if (!password) {
         setAuthError("Password wajib diisi.");
         setIsLoading(false);
         return { success: false, error: "Password wajib diisi." };
       }
 
-      // Directly call the backend to initiate login/OTP
-      const { res, data: resData } = await fetchApiJson('/api/auth/login-initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: usernameClean, email: emailClean, password })
-      });
-      
-      if (!res.ok) {
-        setAuthError(resData.error || "Gagal mengirimkan OTP.");
-        setIsLoading(false);
-        return { success: false, error: resData.error || "Gagal mengirimkan OTP." };
+      const idClean = identifier.trim().toLowerCase();
+      let emailToLogin = idClean;
+
+      // Check if identifier is username or email
+      if (!idClean.includes('@')) {
+        // Query profiles table for the username
+        const { data: profile, error: profileErr } = await supabase
+          .from('profiles')
+          .select('email')
+          .eq('username', idClean)
+          .maybeSingle();
+
+        if (profileErr) {
+          console.error("Error querying profiles for username:", profileErr);
+        }
+
+        if (!profile || !profile.email) {
+          setAuthError("Username tidak ditemukan");
+          setIsLoading(false);
+          return { success: false, error: "Username tidak ditemukan" };
+        }
+        emailToLogin = profile.email;
       }
 
-      setOtpPending(true);
+      // Perform signInWithPassword
+      const { data, error: loginErr } = await supabase.auth.signInWithPassword({
+        email: emailToLogin,
+        password: password,
+      });
+
+      if (loginErr) {
+        const msg = loginErr.message.toLowerCase();
+        let displayError = loginErr.message;
+        if (msg.includes("invalid login credentials") || msg.includes("invalid password") || msg.includes("invalid credentials")) {
+          displayError = "Password salah";
+        } else if (msg.includes("email not confirmed") || msg.includes("email_not_confirmed")) {
+          displayError = "Email belum diverifikasi. Silakan periksa email Anda.";
+        } else if (msg.includes("user not found")) {
+          displayError = "Email tidak terdaftar";
+        }
+        setAuthError(displayError);
+        setIsLoading(false);
+        return { success: false, error: displayError };
+      }
+
+      if (!data.user) {
+        setAuthError("User tidak ditemukan.");
+        setIsLoading(false);
+        return { success: false, error: "User tidak ditemukan." };
+      }
+
+      // Fetch profile details
+      const { data: profile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profileErr) {
+        console.warn("Could not fetch profile during login:", profileErr);
+      }
+
+      const baseUser: User = {
+        id: data.user.id,
+        username: profile?.username || data.user.email?.split('@')[0] || 'user',
+        email: data.user.email || '',
+        name: profile?.name || data.user.user_metadata?.full_name || 'User',
+        role: profile?.role || 'admin',
+        email_confirmed_at: data.user.email_confirmed_at || null
+      };
+
+      setUser(baseUser);
       setIsLoading(false);
-      return { success: true, otpSent: true }; // Perlu verifikasi OTP
+      return { success: true };
     } catch (error: any) {
-      console.error("Login initiation error:", error);
-      setAuthError(error.message || "Gagal memproses login.");
+      console.error("Login process error:", error);
+      const errMsg = error.message || "Gagal memproses login.";
+      setAuthError(errMsg);
       setIsLoading(false);
-      return { success: false, error: error.message || "Gagal memproses login." };
+      return { success: false, error: errMsg };
     }
   };
 

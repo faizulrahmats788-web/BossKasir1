@@ -32,6 +32,7 @@ const LoginView: React.FC = () => {
   const [localIsLoading, setLocalIsLoading] = useState(false); // Add local loading state
 
   // Sesi inputs
+  const [identifier, setIdentifier] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
