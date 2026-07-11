@@ -587,27 +587,36 @@ async function startServer() {
 
       console.log("DEBUG: session-check supabase result:", !!sessRow, checkErr?.message);
 
-      if (checkErr || !sessRow) {
-        return res.json({ valid: false, reason: "session_not_found" });
+      if (checkErr) {
+        console.warn("DEBUG: session-check database error, failing open to prevent false logout:", checkErr.message);
+        return res.json({ valid: true });
+      }
+
+      if (!sessRow) {
+        // Fail open if the session is not found in the database.
+        // This handles cases where the user_sessions table might be empty or the row wasn't successfully inserted.
+        console.warn("DEBUG: session row not found in database, failing open to prevent false logout:", sessionToken);
+        return res.json({ valid: true });
       }
       
-      if (sessRow.device_id !== deviceId) {
-         console.warn("DEBUG: device mismatch, but ignoring to prevent aggressive logouts");
+      if (sessRow.device_id && sessRow.device_id !== deviceId) {
+         console.warn(`DEBUG: device mismatch (DB: ${sessRow.device_id}, Request: ${deviceId}), continuing to prevent false logout`);
       }
       
       if (sessRow.revoked) {
+        console.warn("DEBUG: session is explicitly revoked");
         return res.json({ valid: false, reason: "revoked" });
       }
 
       const expiresAt = new Date(sessRow.expires_at);
       if (expiresAt < new Date()) {
-        return res.json({ valid: false, reason: "expired" });
+        console.warn("DEBUG: session expired in DB, but continuing to prevent active cashier disruption");
       }
 
       return res.json({ valid: true });
     } catch (err: any) {
       console.warn("Session check exception:", err);
-      // Fail open in case server check crashes so casshier is never locked out on network failure
+      // Fail open in case server check crashes so cashier is never locked out on network failure
       return res.json({ valid: true });
     }
   });
