@@ -346,20 +346,13 @@ async function startServer() {
           expires_at: expiredAt.toISOString(),
         };
         
-        // Try inserting first
-        const { data: insertedOtp, error: insertErr } = await supabaseService.from("otps").insert(insertData).select().single();
+        // Hapus OTP lama terlebih dahulu
+        await supabaseService.from("otps").delete().eq("email", emailClean);
+
+        const { error: insertErr } = await supabaseService.from("otps").insert(insertData);
         
         if (!insertErr) {
-          console.log(`DEBUG: OTP Successfully saved for ${emailClean}. OTP ID: ${insertedOtp?.id}, Expires: ${insertedOtp?.expires_at}`);
-        } else if (insertErr.code === '23505') {
-            // Already exists, update instead
-            const { data: updatedOtp, error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean).select().single();
-            if (!updateErr) {
-                console.log(`DEBUG: OTP Successfully updated for ${emailClean}. OTP ID: ${updatedOtp?.id}, Expires: ${updatedOtp?.expires_at}`);
-            } else {
-                console.error("Database OTP update error:", updateErr);
-                return res.status(500).json({ error: "Gagal menyimpan kode OTP.", details: updateErr.message });
-            }
+          console.log(`DEBUG: OTP Successfully saved for ${emailClean}. Expires: ${insertData.expires_at}`);
         } else {
           console.error("Database OTP save error structure:", JSON.stringify(insertErr, null, 2));
           console.error("Database OTP save error code:", insertErr.code, "message:", insertErr.message, "details:", insertErr.details, "hint:", insertErr.hint);

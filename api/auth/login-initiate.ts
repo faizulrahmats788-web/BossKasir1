@@ -72,18 +72,13 @@ export default async function handler(req: any, res: any) {
             expires_at: expiredAt.toISOString(),
         };
 
-        const { data: insertedOtp, error: insertErr } = await supabaseService.from("otps").insert(insertData).select().single();
+        // Hapus OTP lama terlebih dahulu
+        await supabaseService.from("otps").delete().eq("email", emailClean);
+
+        const { error: insertErr } = await supabaseService.from("otps").insert(insertData);
         
         if (!insertErr) {
-            console.log(`DEBUG: OTP Successfully saved for ${emailClean}. OTP ID: ${insertedOtp?.id}, Expires: ${insertedOtp?.expires_at}`);
-        } else if (insertErr.code === '23505') {
-            const { data: updatedOtp, error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean).select().single();
-            if (!updateErr) {
-                console.log(`DEBUG: OTP Successfully updated for ${emailClean}. OTP ID: ${updatedOtp?.id}, Expires: ${updatedOtp?.expires_at}`);
-            } else {
-                console.error("Database OTP update error:", updateErr);
-                return res.status(500).json({ error: "Gagal menyimpan kode OTP.", details: updateErr.message });
-            }
+            console.log(`DEBUG: OTP Successfully saved for ${emailClean}. Expires: ${insertData.expires_at}`);
         } else {
             console.error("Database OTP save error:", insertErr);
             return res.status(500).json({ error: "Gagal menyimpan kode OTP. Pastikan tabel otps tersedia.", details: insertErr.message });

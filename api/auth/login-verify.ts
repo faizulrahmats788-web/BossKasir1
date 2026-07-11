@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { supabaseService } from '../_lib/supabase.js';
 import { hashString } from '../_lib/utils.js';
+import crypto from "crypto";
 
 export default async function handler(req: any, res: any) {
     try {
@@ -80,9 +81,41 @@ export default async function handler(req: any, res: any) {
              return res.status(401).json({ error: "Gagal memverifikasi session." });
         }
 
+        const sessionToken = crypto.randomUUID();
+
+        // Step A: Hapus/Invalidkan sesi lama dari database
+        try {
+            await supabaseService
+                .from("active_sessions")
+                .delete()
+                .eq("user_id", userIdFinal);
+        } catch (dbEx) {
+            console.warn("DB Session delete failed:", dbEx);
+        }
+
+        // Step B: Daftarkan sesi aktif baru di database
+        try {
+            await supabaseService.from("active_sessions").insert({
+                user_id: userIdFinal,
+                device_id: deviceId,
+                session_token: sessionToken,
+                last_active: new Date().toISOString()
+            });
+        } catch (dbEx) {
+            console.warn("DB table active_sessions not ready, continuing...");
+        }
+
         return res.json({
             success: true,
-            user: profile || { id: userIdFinal, email: emailClean },
+            sessionToken,
+            deviceId,
+            user: profile || { 
+                id: userIdFinal, 
+                username: emailClean.split("@")[0],
+                email: emailClean,
+                name: emailClean.split("@")[0],
+                role: "admin"
+            },
             session: authData.session,
             message: "Login berhasil."
         });
