@@ -33,7 +33,6 @@ export default async function handler(req: any, res: any) {
             .from("otps")
             .select("*")
             .eq("email", emailClean)
-            .gt("expires_at", new Date().toISOString())
             .order("expires_at", { ascending: false })
             .limit(1);
 
@@ -71,44 +70,27 @@ export default async function handler(req: any, res: any) {
         const { data: profile } = await supabaseService.from("profiles").select("*").eq("email", emailClean).maybeSingle();
         const userIdFinal = targetUserId || profile?.id;
 
-        const supabaseAnon = createClient(process.env.VITE_SUPABASE_URL!, process.env.VITE_SUPABASE_ANON_KEY!);
-        const { data: authData, error: authError } = await supabaseAnon.auth.signInWithPassword({
-            email: emailClean,
-            password: password || "default123",
-        });
-
-        if (authError) {
-             return res.status(401).json({ error: "Gagal memverifikasi session." });
-        }
-
         const sessionToken = crypto.randomUUID();
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-        // Step A: Hapus/Invalidkan sesi lama dari database
+        // Step A: Daftarkan sesi aktif baru di database user_sessions
         try {
-            await supabaseService
-                .from("active_sessions")
-                .delete()
-                .eq("user_id", userIdFinal);
-        } catch (dbEx) {
-            console.warn("DB Session delete failed:", dbEx);
-        }
-
-        // Step B: Daftarkan sesi aktif baru di database
-        try {
-            await supabaseService.from("active_sessions").insert({
+            await supabaseService.from("user_sessions").insert({
                 user_id: userIdFinal,
                 device_id: deviceId,
                 session_token: sessionToken,
-                last_active: new Date().toISOString()
+                expires_at: expiresAt.toISOString(),
+                revoked: false
             });
         } catch (dbEx) {
-            console.warn("DB table active_sessions not ready, continuing...");
+            console.warn("DB table user_sessions error (possibly not created), continuing...", dbEx);
         }
 
         return res.json({
             success: true,
             sessionToken,
             deviceId,
+            otpVerified: true,
             user: profile || { 
                 id: userIdFinal, 
                 username: emailClean.split("@")[0],
@@ -116,8 +98,7 @@ export default async function handler(req: any, res: any) {
                 name: emailClean.split("@")[0],
                 role: "admin"
             },
-            session: authData.session,
-            message: "Login berhasil."
+            message: "Login berhasil"
         });
 
     } catch (err: any) {

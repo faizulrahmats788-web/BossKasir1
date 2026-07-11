@@ -147,3 +147,14 @@ CREATE POLICY "Users can only access own data" ON public.sale_items FOR ALL USIN
 CREATE POLICY "Users can only access own data" ON public.inventory_logs FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can only access own data" ON public.cafe_settings FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can only access own data" ON public.payment_methods FOR ALL USING (auth.uid() = user_id);
+
+-- 11. USER SESSIONS Table (Vercel Fix)
+CREATE TABLE IF NOT EXISTS public.user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    session_token TEXT UNIQUE NOT NULL,
+    device_id TEXT NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    revoked BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);

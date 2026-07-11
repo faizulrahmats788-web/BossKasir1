@@ -261,12 +261,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (res.ok) {
           if (data.valid === false) {
-            console.warn("Session invalidated globally. Forcing user logout:", data.message);
+            console.warn("Session invalidated globally. Forcing user logout:", data.reason);
             // Invalidate session values locally to force a logout screen
             setSessionToken(null);
             setUser(null);
             setCart([]);
-            setAuthError(data.message || "Sesi Anda dinonaktifkan karena login terdeteksi dari perangkat lain.");
+            setAuthError(data.reason ? `Sesi tidak valid: ${data.reason}` : "Sesi Anda dinonaktifkan karena login terdeteksi dari perangkat lain.");
+            localStorage.removeItem('pos_session_token');
+            localStorage.removeItem('currentUser');
+            localStorage.removeItem('otpVerified');
           }
         }
       } catch (err) {
@@ -739,13 +742,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const eStr = email.toLowerCase().trim();
-      const deviceId = localStorage.getItem("device_id") || "web-" + Date.now();
+      
+      // Get deviceId globally, or fallback
+      let currentDeviceId = localStorage.getItem('pos_device_id');
+      if (!currentDeviceId) {
+        currentDeviceId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+        localStorage.setItem('pos_device_id', currentDeviceId);
+      }
       
       // 1. Verifikasi OTP menggunakan backend
       const { res, data: resData } = await fetchApiJson('/api/auth/login-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email: eStr, otp, password, deviceId })
+        body: JSON.stringify({ username, email: eStr, otp, password, deviceId: currentDeviceId })
       });
 
       if (!res.ok) {
@@ -754,36 +763,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return false;
       }
 
-      // Backend returns the real Supabase session, so we set it
-      setOtpPending(false);
-      
       console.log('OTP Verify response:', resData);
 
       if (resData.sessionToken) {
-        console.log('Setting sessionToken:', resData.sessionToken);
-        setSessionToken(resData.sessionToken);
-      }
+        localStorage.setItem("pos_session_token", resData.sessionToken);
+        localStorage.setItem("pos_device_id", currentDeviceId);
+        localStorage.setItem("currentUser", JSON.stringify(resData.user));
+        localStorage.setItem("otpVerified", "true");
 
-      if (resData.session) {
-        await supabase.auth.setSession(resData.session);
-        setUser(resData.session.user);
-        console.log('Set user from session:', resData.session.user);
-      } else if (resData.user) {
-        // If backend doesn't return session, but returns user, use it
-        setUser(resData.user);
-        console.log('Set user from resData.user:', resData.user);
+        setSessionToken(resData.sessionToken);
+        
+        // Restore supabase session for RLS
+        try {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: eStr,
+            password: password || 'default123'
+          });
+          if (!error && data.user) {
+             setUser(data.user as any);
+             console.log('Set user from Supabase session:', data.user);
+          } else {
+             setUser(resData.user);
+          }
+        } catch (ex) {
+          setUser(resData.user);
+        }
+        
+        setOtpPending(false);
+        
+        console.log('Set sessionToken and user from resData');
       } else {
-        // Fallback: If backend doesn't return session, we use signInWithPassword
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: eStr,
-          password: password || 'default123'
-        });
-        if (error) throw error;
-        setUser(data.user as any);
-        console.log('Set user from fallback signInWithPassword:', data.user);
+        throw new Error("Invalid response: missing sessionToken");
       }
-      
-      console.log('Auth state after loginVerifyOtp:', { user: resData.user || 'no-user', sessionToken: resData.sessionToken || 'no-token' });
       
       setIsLoading(false);
       return true;

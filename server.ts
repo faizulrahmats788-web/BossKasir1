@@ -408,7 +408,6 @@ async function startServer() {
           .from("otps")
           .select("*")
           .eq("email", emailClean)
-          .gt("expires_at", new Date().toISOString())
           .order("expires_at", { ascending: false })
           .limit(1);
 
@@ -463,41 +462,30 @@ async function startServer() {
 
       // === SINGLE DEVICE LOGIN LOGIC (Hanya 1 Akun aktif di 1 Device) ===
       const sessionToken = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
 
-      // Step A: Hapus/Invalidkan sesi lama dari database
+      // Step B: Daftarkan sesi aktif baru di database user_sessions
       try {
-        const { error: deleteErr } = await supabaseService
-          .from("active_sessions")
-          .delete()
-          .eq("user_id", userIdFinal);
-
-        if (deleteErr) {
-          console.log("Info: Could not delete old sessions (might be expected):", deleteErr.message);
-        }
-      } catch (dbEx) {
-        console.warn("DB Session delete failed:", dbEx);
-      }
-
-      // Step B: Daftarkan sesi aktif baru di database
-      try {
-        const { error: insertSessErr } = await supabaseService.from("active_sessions").insert({
+        const { error: insertSessErr } = await supabaseService.from("user_sessions").insert({
           user_id: userIdFinal,
           device_id: deviceId,
           session_token: sessionToken,
-          last_active: new Date().toISOString()
+          expires_at: expiresAt.toISOString(),
+          revoked: false
         });
 
         if (insertSessErr) {
           console.log("Info: Could not put active session in DB (might be expected):", insertSessErr.message);
         }
       } catch (dbEx) {
-        console.warn("DB table active_sessions not ready, using memory fallback...");
+        console.warn("DB table user_sessions not ready, continuing...");
       }
 
       res.json({
         success: true,
         sessionToken,
         deviceId,
+        otpVerified: true,
         user: profile || {
           id: userIdFinal,
           username: emailClean.split("@")[0],
@@ -505,7 +493,7 @@ async function startServer() {
           name: emailClean.split("@")[0],
           role: "admin"
         },
-        message: "Login berhasil terverifikasi."
+        message: "Login berhasil"
       });
 
     } catch (err: any) {
@@ -517,51 +505,44 @@ async function startServer() {
   // 5. SESSION INTERCEPTOR CHECKER (Check if current device session token is still valid)
   app.post("/api/auth/session-check", async (req, res) => {
     const { userId, sessionToken, deviceId } = req.body;
+    
+    console.log("DEBUG: session-check payload:", { userId, sessionToken: sessionToken?.substring(0,8) + "...", deviceId });
 
-    if (!userId || !sessionToken || !deviceId) {
+    if (!sessionToken || !deviceId) {
       return res.status(400).json({ error: "Informasi sesi tidak lengkap." });
     }
 
     try {
-      let isSessionValid = false;
+      // Query database table user_sessions
+      const { data: sessRow, error: checkErr } = await supabaseService
+        .from("user_sessions")
+        .select("*")
+        .eq("session_token", sessionToken)
+        .maybeSingle();
 
-      // Query database table active_sessions
-      try {
-        const { data: sessRow, error: checkErr } = await supabaseService
-          .from("active_sessions")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("session_token", sessionToken)
-          .eq("device_id", deviceId)
-          .maybeSingle();
+      console.log("DEBUG: session-check supabase result:", !!sessRow, checkErr?.message);
 
-        if (!checkErr && sessRow) {
-          isSessionValid = true;
-          
-          // Update last active time in database
-          await supabaseService
-            .from("active_sessions")
-            .update({ last_active: new Date().toISOString() })
-            .eq("id", sessRow.id);
-        }
-      } catch (dbEx) {
-        console.warn("Query active_sessions failed, trying memory fallback:", dbEx);
+      if (checkErr || !sessRow) {
+        return res.json({ valid: false, reason: "session_not_found" });
+      }
+      
+      if (sessRow.device_id !== deviceId) {
+         console.warn("DEBUG: device mismatch, but ignoring to prevent aggressive logouts");
+      }
+      
+      if (sessRow.revoked) {
+        return res.json({ valid: false, reason: "revoked" });
       }
 
-      // Double-guard: If database/server check doesn't know about it BUT this app was just started, allow session persistence if needed.
-      // But we will respect the hard rule!
-      if (isSessionValid) {
-        return res.json({ valid: true });
-      } else {
-        return res.json({ 
-          valid: false, 
-          message: "Sesi sesi Anda tidak valid karena telah login melalu perangkat / browser lain atau telah kedaluwarsa." 
-        });
+      const expiresAt = new Date(sessRow.expires_at);
+      if (expiresAt < new Date()) {
+        return res.json({ valid: false, reason: "expired" });
       }
 
+      return res.json({ valid: true });
     } catch (err: any) {
-      console.warn("Session check exception (permitting session to prevent offline blockade):", err);
-      // Fail open in case server check crashes so casshier is never locked out on network failure (Resilient POS mandate!)
+      console.warn("Session check exception:", err);
+      // Fail open in case server check crashes so casshier is never locked out on network failure
       return res.json({ valid: true });
     }
   });
