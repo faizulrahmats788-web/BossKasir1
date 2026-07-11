@@ -42,25 +42,6 @@ async function startServer() {
 
   app.use(express.json());
 
-  // === IN-MEMORY SECURE FALLBACKS (Jika tabel di database belum terbuat) ===
-  const inMemoryOtps = new Map<string, {
-    id: string;
-    userId: string | null;
-    email: string;
-    otpCodeHash: string;
-    type: "login" | "forgot_password";
-    expiredAt: Date;
-    used: boolean;
-  }>();
-
-  const inMemorySessions = new Map<string, {
-    id: string;
-    userId: string;
-    deviceId: string;
-    sessionToken: string;
-    lastActive: Date;
-  }>();
-
   // === SISTEM KEAMANAN & PROTEKSI BRUTE FORCE ===
   const ipRateLimits = new Map<string, { count: number; resetAt: number }>();
   const otpAttempts = new Map<string, { attempts: number; blockUntil: number }>();
@@ -387,18 +368,6 @@ async function startServer() {
         console.error("Database error saving OTP (caught exception):", dbEx);
       }
 
-      // Safe Memory backup fallback
-      const tokenKey = `${emailClean}_login`;
-      inMemoryOtps.set(tokenKey, {
-        id: crypto.randomUUID(),
-        userId: targetUserId,
-        email: emailClean,
-        otpCodeHash: otpHash,
-        type: "login",
-        expiredAt,
-        used: false
-      });
-
       // Step E: Kirim Email OTP
       await sendOtpHtmlEmail(emailClean, generatedOtp, "login");
 
@@ -467,16 +436,6 @@ async function startServer() {
         console.warn("Could not query DB otps, trying memory fallback:", dbEx);
       }
 
-      // Memory Fallback
-      if (!isValidOtp) {
-        const memData = inMemoryOtps.get(`${emailClean}_login`);
-        if (memData && !memData.used && memData.otpCodeHash === incomingHash && new Date() < memData.expiredAt) {
-          isValidOtp = true;
-          targetUserId = memData.userId;
-          memData.used = true;
-        }
-      }
-
       // Global master key bypass if in local preview and OTP matches standard guest (optional, for developer quick test)
       if (otp === "123456" && !isValidOtp) {
         isValidOtp = true;
@@ -489,6 +448,9 @@ async function startServer() {
 
       // OTP is valid!
       recordOtpAttempt(emailClean, true);
+      
+      // Mark OTP as used in DB
+      await supabaseService.from("otps").update({ used: true }).eq("email", emailClean).eq("otp", incomingHash);
 
       // Cari user profile detail
       const { data: profile } = await supabaseService.from("profiles").select("*").eq("email", emailClean).maybeSingle();
@@ -515,13 +477,6 @@ async function startServer() {
         console.warn("DB Session delete failed:", dbEx);
       }
 
-      // Hapus dari memory fallback juga
-      for (const [key, sess] of inMemorySessions.entries()) {
-        if (sess.userId === userIdFinal) {
-          inMemorySessions.delete(key);
-        }
-      }
-
       // Step B: Daftarkan sesi aktif baru di database
       try {
         const { error: insertSessErr } = await supabaseService.from("active_sessions").insert({
@@ -537,15 +492,6 @@ async function startServer() {
       } catch (dbEx) {
         console.warn("DB table active_sessions not ready, using memory fallback...");
       }
-
-      // Daftarkan di memory fallback
-      inMemorySessions.set(sessionToken, {
-        id: crypto.randomUUID(),
-        userId: userIdFinal,
-        deviceId: deviceId,
-        sessionToken: sessionToken,
-        lastActive: new Date()
-      });
 
       res.json({
         success: true,
@@ -599,15 +545,6 @@ async function startServer() {
         }
       } catch (dbEx) {
         console.warn("Query active_sessions failed, trying memory fallback:", dbEx);
-      }
-
-      // Memory fallback check
-      if (!isSessionValid) {
-        const memSess = inMemorySessions.get(sessionToken);
-        if (memSess && memSess.userId === userId && memSess.deviceId === deviceId) {
-          isSessionValid = true;
-          memSess.lastActive = new Date();
-        }
       }
 
       // Double-guard: If database/server check doesn't know about it BUT this app was just started, allow session persistence if needed.
