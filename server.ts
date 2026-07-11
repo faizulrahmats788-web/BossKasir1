@@ -394,6 +394,7 @@ async function startServer() {
     }
 
     const emailClean = email.toLowerCase().trim();
+    const otpClean = otp.trim();
 
     // Check brute force
     const bruteCheck = checkBruteForce(emailClean);
@@ -402,7 +403,7 @@ async function startServer() {
     }
 
     try {
-      const incomingHash = hashString(otp);
+      const incomingHash = hashString(otpClean);
       let isValidOtp = false;
       let targetUserId: string | null = null;
 
@@ -412,28 +413,30 @@ async function startServer() {
           .from("otps")
           .select("*")
           .eq("email", emailClean)
-          .order("created_at", { ascending: false });
+          .gt("expires_at", new Date().toISOString())
+          .order("expires_at", { ascending: false })
+          .limit(1);
 
         if (!fetchErr && dbOtps && dbOtps.length > 0) {
-          console.log("DEBUG: Checking DB OTP for email:", emailClean, "Found", dbOtps.length, "OTP entries");
-          console.log("DEBUG: All stored OTP entries for", emailClean, ":", JSON.stringify(dbOtps));
-          const matchingOtp = dbOtps.find(x => {
-            const isMatch = x.otp === incomingHash;
-            const isNotExpired = new Date() < new Date(x.expires_at);
-            console.log(`DEBUG: OTP check: hashMatch=${isMatch}, notExpired=${isNotExpired}, storedOtp=${x.otp}, incomingHash=${incomingHash}, expiresAt=${x.expires_at}`);
-            return isMatch && isNotExpired;
-          });
-          if (matchingOtp) {
+          const latestOtp = dbOtps[0];
+          console.log(`DEBUG: Found OTP record for ${emailClean}. Checking match...`);
+          
+          const isMatch = latestOtp.otp === incomingHash;
+          const isNotExpired = new Date() < new Date(latestOtp.expires_at);
+          
+          console.log(`DEBUG: Match=${isMatch}, NotExpired=${isNotExpired}, ExpiresAt=${latestOtp.expires_at}`);
+          
+          if (isMatch && isNotExpired) {
             isValidOtp = true;
-            targetUserId = matchingOtp.user_id;
+            targetUserId = latestOtp.user_id; // Will be undefined if user_id is not in table, handled below
           } else {
-            console.warn("DEBUG: No matching OTP found in DB for", emailClean);
+            console.warn("DEBUG: OTP mismatch for", emailClean);
           }
         } else {
-          console.warn("DEBUG: No OTP entries found in DB for", emailClean, "FetchErr:", fetchErr);
+          console.warn("DEBUG: No valid OTP entries found in DB for", emailClean, "FetchErr:", fetchErr?.message);
         }
       } catch (dbEx) {
-        console.warn("Could not query DB otps, trying memory fallback:", dbEx);
+        console.warn("Could not query DB otps:", dbEx);
       }
 
       // Global master key bypass if in local preview and OTP matches standard guest (optional, for developer quick test)
@@ -443,14 +446,17 @@ async function startServer() {
 
       if (!isValidOtp) {
         recordOtpAttempt(emailClean, false);
-        return res.status(400).json({ error: "Kode OTP salah, expired, atau sudah pernah digunakan." });
+        return res.status(400).json({ 
+          error: "OTP salah atau expired", 
+          reason: "otp_not_found_or_mismatch" 
+        });
       }
 
       // OTP is valid!
       recordOtpAttempt(emailClean, true);
       
-      // Mark OTP as used in DB
-      await supabaseService.from("otps").update({ used: true }).eq("email", emailClean).eq("otp", incomingHash);
+      // Delete OTP after successful use
+      await supabaseService.from("otps").delete().eq("email", emailClean).eq("otp", incomingHash);
 
       // Cari user profile detail
       const { data: profile } = await supabaseService.from("profiles").select("*").eq("email", emailClean).maybeSingle();
