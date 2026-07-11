@@ -317,10 +317,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentToken = localStorage.getItem('pos_session_token');
+      const savedUser = localStorage.getItem('pos_user');
       if (session && !otpPending) {
         handleUser(session.user);
-      } else if (currentToken) {
-        // Keep the user if we have a local session token, even if Supabase session is null
+      } else if (currentToken || savedUser) {
+        // Keep the user if we have a local session token or cached user details
         setIsLoading(false);
       } else {
         setUser(null);
@@ -330,9 +331,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const currentToken = localStorage.getItem('pos_session_token');
+      const savedUser = localStorage.getItem('pos_user');
       if (session && !otpPending) {
         handleUser(session.user);
-      } else if (!session && !currentToken) {
+      } else if (!session && !currentToken && !savedUser) {
         setUser(null);
         setIsLoading(false);
       }

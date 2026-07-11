@@ -95,6 +95,38 @@ const VerifyOtpView: React.FC = () => {
         if (profileError) {
           console.warn("Profile creation failed", profileError);
         }
+
+        // Register session on backend so we have a persistent pos_session_token
+        let currentDeviceId = localStorage.getItem('pos_device_id');
+        if (!currentDeviceId) {
+          currentDeviceId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+          localStorage.setItem('pos_device_id', currentDeviceId);
+        }
+
+        try {
+          const registerSessionRes = await fetch('/api/auth/register-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: data.user!.id,
+              email: data.user!.email,
+              deviceId: currentDeviceId
+            })
+          });
+
+          if (registerSessionRes.ok) {
+            const registerSessionData = await registerSessionRes.json();
+            if (registerSessionData.sessionToken) {
+              localStorage.setItem("pos_session_token", registerSessionData.sessionToken);
+              localStorage.setItem("pos_device_id", currentDeviceId);
+              localStorage.setItem("currentUser", JSON.stringify(data.user));
+              localStorage.setItem("otpVerified", "true");
+            }
+          }
+        } catch (sessionErr) {
+          console.warn("Failed to register session token on backend:", sessionErr);
+        }
+
         success = true;
       }
 

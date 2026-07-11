@@ -567,6 +567,38 @@ async function startServer() {
     }
   });
 
+  // 4b. REGISTER SESSION (Create active session for newly signed up or authenticated users)
+  app.post("/api/auth/register-session", async (req, res) => {
+    const { userId, email, deviceId } = req.body;
+    console.log("DEBUG: register-session payload:", { userId, email, deviceId });
+
+    if (!userId || !deviceId) {
+      return res.status(400).json({ error: "Informasi sesi tidak lengkap." });
+    }
+
+    try {
+      const sessionToken = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
+
+      try {
+        await supabaseService.from("user_sessions").insert({
+          user_id: userId,
+          device_id: deviceId,
+          session_token: sessionToken,
+          expires_at: expiresAt.toISOString(),
+          revoked: false
+        });
+      } catch (insertErr: any) {
+        console.warn("DB user_sessions insert error during register-session:", insertErr.message);
+      }
+
+      return res.json({ success: true, sessionToken });
+    } catch (err: any) {
+      console.error("Register session error:", err);
+      return res.status(500).json({ error: "Gagal mendaftarkan sesi: " + err.message });
+    }
+  });
+
   // 5. SESSION INTERCEPTOR CHECKER (Check if current device session token is still valid)
   app.post("/api/auth/session-check", async (req, res) => {
     const { userId, sessionToken, deviceId } = req.body;
