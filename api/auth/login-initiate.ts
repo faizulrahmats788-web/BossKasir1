@@ -66,20 +66,27 @@ export default async function handler(req: any, res: any) {
         const otpHash = hashString(generatedOtp);
         const expiredAt = new Date(Date.now() + 5 * 60 * 1000); 
 
-        const targetUserId = authData.user.id;
-
-        const { error: insertErr } = await supabaseService.from("otps").insert({
+        const insertData = {
             email: emailClean,
             otp: otpHash,
             expires_at: expiredAt.toISOString(),
-            user_id: targetUserId,
-        });
+        };
+
+        const { data: insertedOtp, error: insertErr } = await supabaseService.from("otps").insert(insertData).select().single();
         
-        if (insertErr && insertErr.code === '23505') {
-            await supabaseService.from("otps").update({
-                otp: otpHash,
-                expires_at: expiredAt.toISOString(),
-            }).eq('email', emailClean);
+        if (!insertErr) {
+            console.log(`DEBUG: OTP Successfully saved for ${emailClean}. OTP ID: ${insertedOtp?.id}, Expires: ${insertedOtp?.expires_at}`);
+        } else if (insertErr.code === '23505') {
+            const { data: updatedOtp, error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean).select().single();
+            if (!updateErr) {
+                console.log(`DEBUG: OTP Successfully updated for ${emailClean}. OTP ID: ${updatedOtp?.id}, Expires: ${updatedOtp?.expires_at}`);
+            } else {
+                console.error("Database OTP update error:", updateErr);
+                return res.status(500).json({ error: "Gagal menyimpan kode OTP.", details: updateErr.message });
+            }
+        } else {
+            console.error("Database OTP save error:", insertErr);
+            return res.status(500).json({ error: "Gagal menyimpan kode OTP. Pastikan tabel otps tersedia.", details: insertErr.message });
         }
 
         await sendOtpHtmlEmail(emailClean, generatedOtp, "login");

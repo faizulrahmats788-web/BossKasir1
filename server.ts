@@ -338,8 +338,7 @@ async function startServer() {
 
       const targetUserId = authUser?.id || profile?.id || null;
 
-      // Step D: Simpan ke otps (Supabase DB with Memory Fallback)
-      let savedToDb = false;
+      // Step D: Simpan ke otps (Supabase DB)
       try {
         const insertData: any = {
           email: emailClean,
@@ -348,24 +347,27 @@ async function startServer() {
         };
         
         // Try inserting first
-        const { error: insertErr } = await supabaseService.from("otps").insert(insertData);
+        const { data: insertedOtp, error: insertErr } = await supabaseService.from("otps").insert(insertData).select().single();
         
         if (!insertErr) {
-          savedToDb = true;
+          console.log(`DEBUG: OTP Successfully saved for ${emailClean}. OTP ID: ${insertedOtp?.id}, Expires: ${insertedOtp?.expires_at}`);
         } else if (insertErr.code === '23505') {
             // Already exists, update instead
-            const { error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean);
+            const { data: updatedOtp, error: updateErr } = await supabaseService.from("otps").update(insertData).eq('email', emailClean).select().single();
             if (!updateErr) {
-                savedToDb = true;
+                console.log(`DEBUG: OTP Successfully updated for ${emailClean}. OTP ID: ${updatedOtp?.id}, Expires: ${updatedOtp?.expires_at}`);
             } else {
                 console.error("Database OTP update error:", updateErr);
+                return res.status(500).json({ error: "Gagal menyimpan kode OTP.", details: updateErr.message });
             }
         } else {
           console.error("Database OTP save error structure:", JSON.stringify(insertErr, null, 2));
           console.error("Database OTP save error code:", insertErr.code, "message:", insertErr.message, "details:", insertErr.details, "hint:", insertErr.hint);
+          return res.status(500).json({ error: "Gagal menyimpan kode OTP. Pastikan tabel otps tersedia.", details: insertErr.message });
         }
-      } catch (dbEx) {
+      } catch (dbEx: any) {
         console.error("Database error saving OTP (caught exception):", dbEx);
+        return res.status(500).json({ error: "Terjadi kesalahan sistem saat menyimpan OTP.", details: dbEx.message });
       }
 
       // Step E: Kirim Email OTP

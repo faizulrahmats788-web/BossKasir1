@@ -25,27 +25,46 @@ export default async function handler(req: any, res: any) {
         }
 
         const emailClean = email.toLowerCase().trim();
-        const incomingHash = hashString(otp);
+        const otpClean = otp.trim();
+        const incomingHash = hashString(otpClean);
 
         const { data: dbOtps, error: fetchErr } = await supabaseService
             .from("otps")
             .select("*")
             .eq("email", emailClean)
-            .order("created_at", { ascending: false });
+            .gt("expires_at", new Date().toISOString())
+            .order("expires_at", { ascending: false })
+            .limit(1);
 
         let isValidOtp = false;
         let targetUserId: string | null = null;
 
+        if (fetchErr) {
+            console.error(`DEBUG: Failed to fetch OTP for ${emailClean}. Error:`, fetchErr);
+        }
+
         if (!fetchErr && dbOtps && dbOtps.length > 0) {
-            const matchingOtp = dbOtps.find(x => x.otp === incomingHash && new Date() < new Date(x.expires_at));
-            if (matchingOtp) {
+            const latestOtp = dbOtps[0];
+            console.log(`DEBUG: Found OTP record for ${emailClean}. Checking match...`);
+            
+            const isMatch = latestOtp.otp === incomingHash;
+            const isNotExpired = new Date() < new Date(latestOtp.expires_at);
+            
+            console.log(`DEBUG: Match=${isMatch}, NotExpired=${isNotExpired}, ExpiresAt=${latestOtp.expires_at}`);
+            
+            if (isMatch && isNotExpired) {
                 isValidOtp = true;
-                targetUserId = matchingOtp.user_id;
+                // Delete the OTP as it has been used
+                await supabaseService.from("otps").delete().eq("email", emailClean).eq("otp", incomingHash);
+            } else {
+                console.warn(`DEBUG: OTP mismatch for ${emailClean}.`);
             }
+        } else {
+            console.warn(`DEBUG: No valid OTP found in DB for ${emailClean}.`);
         }
 
         if (!isValidOtp) {
-            return res.status(400).json({ error: "OTP salah atau expired." });
+            return res.status(400).json({ error: "OTP salah atau expired", reason: "otp_not_found" });
         }
 
         const { data: profile } = await supabaseService.from("profiles").select("*").eq("email", emailClean).maybeSingle();
