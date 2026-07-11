@@ -190,28 +190,46 @@ async function startServer() {
 
   // === API ENDPOINTS ===
 
-  // 3. PRE-REGISTER CLEANUP (Remove unverified accounts)
-  app.post("/api/auth/pre-register-cleanup", async (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Email wajib diisi." });
+  // 3. CHECK REGISTER & CLEANUP (Check if email/username exists, cleanup unverified)
+  app.post("/api/auth/check-register", async (req, res) => {
+    const { email, username } = req.body;
+    if (!email || !username) return res.status(400).json({ error: "Email dan username wajib diisi." });
+    
     const emailClean = email.toLowerCase().trim();
+    const usernameClean = username.toLowerCase().trim();
 
     try {
-      // Find unverified user
+      // Cek apakah username sudah ada di tabel profiles
+      const { data: existingUsername } = await supabaseService
+        .from("profiles")
+        .select("id")
+        .eq("username", usernameClean)
+        .maybeSingle();
+
+      if (existingUsername) {
+        return res.json({ available: false, reason: "Username ini sudah terdaftar. Silakan pilih username lain." });
+      }
+        
+      // Find user by email in auth.users
       const { data: { users }, error } = await supabaseService.auth.admin.listUsers();
       if (error) throw error;
       
-      const unverifiedUser = (users as any[]).find(u => u.email === emailClean && !u.email_confirmed_at);
+      const existingUser = (users as any[]).find(u => u.email === emailClean);
       
-      if (unverifiedUser) {
-        await supabaseService.auth.admin.deleteUser(unverifiedUser.id);
-        console.log("Deleted unverified user:", unverifiedUser.id);
+      if (existingUser) {
+        if (existingUser.email_confirmed_at) {
+            return res.json({ available: false, reason: "Email ini sudah terdaftar. Silakan login." });
+        } else {
+            // User ada tapi belum verify, hapus agar bisa daftar ulang dengan password/username baru
+            await supabaseService.auth.admin.deleteUser(existingUser.id);
+            console.log("Deleted unverified user:", existingUser.id);
+        }
       }
       
-      res.json({ success: true });
+      res.json({ available: true, success: true });
     } catch (err: any) {
-      console.error("Cleanup error:", err);
-      res.status(500).json({ error: "Gagal membersihkan user lama." });
+      console.error("Check register error:", err);
+      res.status(500).json({ error: "Gagal memverifikasi ketersediaan." });
     }
   });
 
@@ -227,28 +245,58 @@ async function startServer() {
     console.log("DEBUG: Cleaned Email:", emailClean);
 
     try {
+      let username = null;
+      
       const { data: profiles, error: queryError } = await supabaseService
         .from("profiles")
         .select("username")
         .eq("email", emailClean);
 
-      
       if (queryError) {
         console.error("DEBUG: Query Error:", queryError);
         return res.status(500).json({ error: "Terjadi kesalahan pada database." });
       }
 
-      if (!profiles || profiles.length === 0) {
+      if (profiles && profiles.length > 0) {
+        username = profiles[0].username;
+      } else {
+        // Fallback: check auth.users if they registered but haven't verified
+        console.log("DEBUG: Email not found in profiles. Checking auth.users...");
+        const { data: { users }, error: usersError } = await supabaseService.auth.admin.listUsers();
+        
+        if (!usersError && users) {
+          const user = users.find(u => u.email === emailClean);
+          if (user) {
+            if (user.user_metadata?.username) {
+              username = user.user_metadata.username;
+              console.log("DEBUG: Found username in user_metadata:", username);
+            } else {
+              username = emailClean.split('@')[0];
+              console.log("DEBUG: Missing username, using fallback:", username);
+            }
+
+            // Auto-heal profile
+            try {
+              await supabaseService.from("profiles").upsert({
+                id: user.id,
+                email: emailClean,
+                username: username,
+                name: username,
+                role: 'admin'
+              }, { onConflict: 'id' });
+              console.log("DEBUG: Auto-healed profile for", emailClean);
+            } catch (ex) {
+              console.warn("DEBUG: Auto-heal profile failed", ex);
+            }
+          }
+        }
+      }
+
+      if (!username) {
         console.log("DEBUG: Email not found.");
         return res.status(400).json({ error: "Email tidak terdaftar." });
       }
 
-      if (profiles.length > 1) {
-        console.log("DEBUG: Multiple profiles found.");
-        return res.status(400).json({ error: "Email terduplikasi di database." });
-      }
-
-      const username = profiles[0].username;
       console.log("DEBUG: Username found to send:", username);
       
       await sendUsernameHtmlEmail(emailClean, username);
@@ -296,7 +344,7 @@ async function startServer() {
         .eq("username", usernameClean)
         .maybeSingle();
 
-      const profile = profileByEmail || profileByUsername;
+      let profile = profileByEmail || profileByUsername;
 
       console.log("DEBUG: Profile lookup result:", profile);
       if (!profile) {
@@ -326,6 +374,23 @@ async function startServer() {
       // Jika password tidak cocok
       if (!passwordMatched) {
         return res.status(401).json({ error: `Password atau Email yang Anda masukkan tidak cocok.` });
+      }
+
+      // Auto-heal profile if missing
+      if (!profile && authUser) {
+        console.log("DEBUG: Auto-healing profile for", emailClean, "during login-initiate");
+        try {
+            await supabaseService.from("profiles").upsert({
+              id: authUser.id,
+              email: emailClean,
+              username: usernameClean,
+              name: usernameClean,
+              role: 'admin'
+            }, { onConflict: 'id' });
+            profile = { id: authUser.id, email: emailClean, username: usernameClean, name: usernameClean, role: 'admin' };
+        } catch (ex) {
+            console.warn("DEBUG: Auto-heal profile failed", ex);
+        }
       }
 
       // Sign out to clear any session before OTP verification

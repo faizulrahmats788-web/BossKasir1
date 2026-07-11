@@ -637,23 +637,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const emailValue = email.toLowerCase().trim();
       
-      // 1. Cek apakah email sudah terdaftar DAN sudah terverifikasi
-      const { data: existingUser } = await supabase
-        .from("profiles")
-        .select("id, email_confirmed_at")
-        .eq("email", emailValue)
-        .maybeSingle();
+      // 1. Cek apakah email/username sudah terdaftar
+      const checkRes = await fetch('/api/auth/check-register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailValue, username: username.trim() })
+      });
       
-      if (existingUser?.email_confirmed_at) {
-        setAuthError("Email ini sudah terdaftar. Silakan login.");
-        setIsLoading(false);
-        return false;
+      if (!checkRes.ok) {
+         setAuthError("Gagal memeriksa ketersediaan pendaftaran.");
+         setIsLoading(false);
+         return false;
+      }
+      
+      const checkData = await checkRes.json();
+      if (checkData.available === false) {
+         setAuthError(checkData.reason || "Pendaftaran tidak dapat dilanjutkan.");
+         setIsLoading(false);
+         return false;
       }
       
       // 2. signUp menggunakan email dan password
       const { data, error } = await supabase.auth.signUp({
         email: emailValue,
         password: password,
+        options: {
+          data: {
+            username: username,
+            name: username,
+            role: 'admin'
+          }
+        }
       });
 
       if (error) {
