@@ -25,4 +25,4 @@ export const INITIAL_PAYMENT_METHODS: PaymentMethod[] = [
   { id: 'debit-id', name: 'Debit Card', type: 'non-cash', isActive: true },
 ];
 
-export const APP_LOGO_URL = '/BossKasir.jpeg';
+export const APP_LOGO_URL = '/boss_kasir_logo_1783856818255.jpg';
