@@ -243,7 +243,7 @@ const LoginView: React.FC = () => {
               className="w-full h-full object-cover" 
               referrerPolicy="no-referrer"
               onError={(e) => {
-                e.currentTarget.src = "/BossKasir.jpeg";
+                e.currentTarget.src = "/boss_kasir_logo_1783856818255.jpg";
               }}
             />
           </div>
