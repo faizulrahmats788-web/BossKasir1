@@ -238,12 +238,12 @@ const LoginView: React.FC = () => {
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 bg-cream-50 text-white rounded-2xl flex items-center justify-center mb-4 overflow-hidden border border-coffee-100 shadow-inner">
             <img 
-              src="/bosskasir-logo.jpg" 
+              src={APP_LOGO_URL} 
               alt="BossKasir Logo" 
               className="w-16 h-16 object-contain" 
               referrerPolicy="no-referrer"
               onError={(e) => {
-                e.currentTarget.src = "/bosskasir-logo.jpg";
+                e.currentTarget.src = "./bosskasir-logo.jpg";
               }}
             />
           </div>
