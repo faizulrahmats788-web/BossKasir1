@@ -48,10 +48,23 @@ const VerifyOtpView: React.FC = () => {
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otp.length !== 6) {
-      setError('OTP harus 6 digit.');
+    const cleanedOtp = otp.trim();
+    
+    if (!cleanedOtp) {
+      setError('Kode OTP tidak boleh kosong.');
       return;
     }
+    
+    if (cleanedOtp.length !== 6) {
+      setError('Kode OTP harus terdiri dari 6 digit.');
+      return;
+    }
+    
+    if (!/^\d+$/.test(cleanedOtp)) {
+      setError('Kode OTP hanya boleh berisi angka (0-9).');
+      return;
+    }
+
     setError('');
     setMessage('');
     setIsLoading(true);
@@ -154,6 +167,8 @@ const VerifyOtpView: React.FC = () => {
             <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Kode OTP</label>
             <input
               type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
               maxLength={6}
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
