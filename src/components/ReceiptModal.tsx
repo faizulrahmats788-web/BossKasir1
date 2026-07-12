@@ -43,7 +43,15 @@ const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, onClose }) => {
             <div className="text-center space-y-1 mb-8 border-b-2 border-dashed border-coffee-100 pb-6">
               {(settings?.receiptShowLogo !== false) && (
                 settings?.logoUrl ? (
-                  <img src={settings.logoUrl} alt="Logo" className="mx-auto w-12 h-12 object-cover rounded-xl mb-3" />
+                  <img 
+                    src={settings.logoUrl} 
+                    alt="Logo" 
+                    className="mx-auto w-12 h-12 object-cover rounded-xl mb-3" 
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+                    }}
+                  />
                 ) : (
                   <div className="mx-auto w-12 h-12 bg-coffee-800 text-cream-50 rounded-xl flex items-center justify-center mb-3">
                     <Coffee size={24} />
