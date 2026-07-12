@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../hooks/useApp';
 import { Coffee, ShieldCheck, User as UserIcon, LogIn, ChevronRight, UserPlus, ArrowLeft, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { APP_LOGO_URL } from '../constants';
+import { APP_LOGO_URL } from '../assets/images';
 
 import { supabase } from '../lib/supabase';
 
