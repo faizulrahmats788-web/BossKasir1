@@ -235,7 +235,15 @@ ALTER TABLE public.payment_methods DISABLE ROW LEVEL SECURITY;`}
                   <div className="relative">
                     <div className="h-32 w-32 rounded-[2rem] bg-white border border-coffee-100 flex items-center justify-center overflow-hidden shadow-2xl ring-8 ring-white transition-all transform group-hover:rotate-3">
                       {localSettings.logoUrl ? (
-                        <img src={localSettings.logoUrl} alt="Logo preview" className="h-full w-full object-cover" />
+                        <img 
+                          src={localSettings.logoUrl} 
+                          alt="Logo preview" 
+                          className="h-full w-full object-cover" 
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+                          }}
+                        />
                       ) : (
                         <Camera size={48} className="text-coffee-200" strokeWidth={1} />
                       )}
@@ -477,7 +485,15 @@ ALTER TABLE public.payment_methods DISABLE ROW LEVEL SECURITY;`}
                         <div className="text-center space-y-1 pb-4 border-b border-dashed border-coffee-150">
                           {localSettings.receiptShowLogo !== false && (
                             localSettings.logoUrl ? (
-                              <img src={localSettings.logoUrl} alt="Logo" className="mx-auto w-10 h-10 object-cover rounded-lg mb-2" />
+                              <img 
+                                src={localSettings.logoUrl} 
+                                alt="Logo" 
+                                className="mx-auto w-10 h-10 object-cover rounded-lg mb-2" 
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+                                }}
+                              />
                             ) : (
                               <div className="mx-auto w-10 h-10 bg-coffee-800 text-cream-50 rounded-lg flex items-center justify-center mb-2">
                                 <Coffee size={18} />

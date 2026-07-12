@@ -161,7 +161,7 @@ const LoginView: React.FC = () => {
     
     if (isRegister) {
       if (!username || !email) {
-        setError('Username dan Email wajib diisi');
+        setError('Nama dan Email wajib diisi');
         return;
       }
       if (!password) {
@@ -169,55 +169,49 @@ const LoginView: React.FC = () => {
         return;
       }
       
-      const res = await register(username, password, email);
+      setLocalIsLoading(true);
+      const res = await register(username, email, password);
+      setLocalIsLoading(false);
       if (res.success) {
-        setMessage('Kode OTP telah dikirim ke email Anda.');
-        window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=signup`;
+        setMessage('Pendaftaran berhasil! Mengarahkan ke halaman verifikasi OTP...');
+        const targetEmail = res.email || email;
+        const simulatedParam = res.simulatedOtp ? `&simulatedOtp=${encodeURIComponent(res.simulatedOtp)}` : '';
+        setTimeout(() => {
+          window.location.href = `/verify-otp?email=${encodeURIComponent(targetEmail)}&type=signup&username=${encodeURIComponent(username)}${simulatedParam}`;
+        }, 1500);
       } else {
         setError(res.error || 'Gagal mendaftar akun baru.');
       }
     } else {
-      if (!username || !email || !password) {
-        setError('Username, Email, dan Password wajib diisi');
+      if (!identifier) {
+        setError('Email wajib diisi');
         return;
       }
-
+      if (!password) {
+        setError('Password wajib diisi');
+        return;
+      }
+ 
       setLocalIsLoading(true);
       setError('');
-      console.log("Submitting login payload:", { username, email }); // No password in log
-
+ 
       try {
-        const res = await fetch('/api/auth/login-initiate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, email, password })
-        });
-        
-        const resText = await res.text();
-        console.log("Response Status:", res.status);
-        console.log("Response Body:", resText);
-        
-        let data;
-        try {
-          data = JSON.parse(resText);
-        } catch (err) {
-          throw new Error(`Server returned invalid JSON. Status: ${res.status}`);
-        }
-        
-        if (!res.ok) {
-          throw new Error(data.error || 'Login gagal.');
-        }
-
-        if (data.success && data.otpSent) {
-          console.log("Navigating to verify-otp");
-          sessionStorage.setItem('temp_pwd', password);
-          window.location.href = `/verify-otp?email=${encodeURIComponent(email)}&username=${encodeURIComponent(username)}&type=login`;
+        const res = await login(identifier, password);
+        if (res.success) {
+          // Login successful, the app state will auto-route to dashboard
+        } else if (res.isUnverified) {
+          setMessage('Akun belum diverifikasi. Mengarahkan ke verifikasi OTP...');
+          const targetEmail = res.email || identifier;
+          setTimeout(() => {
+            window.location.href = `/verify-otp?email=${encodeURIComponent(targetEmail)}&type=signup`;
+          }, 1500);
         } else {
-          throw new Error(data.error || 'Gagal mengirim OTP.');
+          setError(res.error || 'Gagal memproses login.');
         }
       } catch (err: any) {
         console.error("Login Error:", err);
         setError(err.message || 'Terjadi kesalahan saat memproses login.');
+      } finally {
         setLocalIsLoading(false);
       }
     }
@@ -243,7 +237,15 @@ const LoginView: React.FC = () => {
       >
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 bg-cream-50 text-white rounded-2xl flex items-center justify-center mb-4 overflow-hidden border border-coffee-100 shadow-inner">
-            <img src={APP_LOGO_URL} alt="Logo" className="w-full h-full object-cover" />
+            <img 
+              src={APP_LOGO_URL} 
+              alt="Logo" 
+              className="w-full h-full object-cover" 
+              referrerPolicy="no-referrer"
+              onError={(e) => {
+                e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+              }}
+            />
           </div>
           <h1 className="text-2xl font-black text-coffee-900 tracking-tighter uppercase italic text-center">
             BossKasir
@@ -313,7 +315,7 @@ const LoginView: React.FC = () => {
               </motion.div>
             )}
 
-            {/* Normal Login/Register or Login Step 2 OTP Fields */}
+            {/* Normal Login/Register Fields */}
             {(!isForgotPassword && !isForgotUsername) && (
               <motion.div 
                 key="login-normal"
@@ -322,44 +324,73 @@ const LoginView: React.FC = () => {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-4"
               >
-                <>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Username</label>
-                    <input
-                      type="text"
-                      value={username}
-                      name="bosskasir_login_username"
-                      autoComplete="off"
-                      onChange={(e) => setUsername(e.target.value)}
-                      placeholder="Username_kamu"
-                      className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Email</label>
-                    <input
-                      type="email"
-                      value={email}
-                      name="bosskasir_login_email"
-                      autoComplete="off"
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="budi@gmail.com"
-                      className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Password</label>
-                    <input
-                      type="password"
-                      value={password}
-                      name="bosskasir_login_password"
-                      autoComplete="new-password"
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
-                    />
-                  </div>
-                </>
+                {isRegister ? (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Nama</label>
+                      <input
+                        type="text"
+                        value={username}
+                        name="bosskasir_register_username"
+                        autoComplete="off"
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Nama Lengkap Anda"
+                        className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Email</label>
+                      <input
+                        type="email"
+                        value={email}
+                        name="bosskasir_register_email"
+                        autoComplete="off"
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="budi@gmail.com"
+                        className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Password</label>
+                      <input
+                        type="password"
+                        value={password}
+                        name="bosskasir_register_password"
+                        autoComplete="new-password"
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Email</label>
+                      <input
+                        type="email"
+                        value={identifier}
+                        name="bosskasir_login_identifier"
+                        autoComplete="email"
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder="budi@gmail.com"
+                        className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-coffee-400 ml-1">Password</label>
+                      <input
+                        type="password"
+                        value={password}
+                        name="bosskasir_login_password"
+                        autoComplete="current-password"
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-3 rounded-2xl bg-cream-50 border border-coffee-100 focus:outline-none focus:border-coffee-500 transition-all text-sm font-bold text-coffee-900 placeholder:text-coffee-300"
+                      />
+                    </div>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -408,15 +439,34 @@ const LoginView: React.FC = () => {
                     ? <><ShieldCheck size={18} /> VERIFIKASI SEKARANG</> 
                     : <><LogIn size={18} /> MASUK APLIKASI</>}
           </button>
+
+          {(isRegister || isForgotPassword || isForgotUsername || isLoginOtpStep) && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsRegister(false);
+                setIsForgotPassword(false);
+                setIsForgotUsername(false);
+                setIsLoginOtpStep(false);
+                setError('');
+                setMessage('');
+                clearAuthError();
+              }}
+              className="w-full bg-cream-50 hover:bg-cream-100 border border-coffee-200 text-coffee-850 py-4 mt-2 rounded-2xl font-black text-sm tracking-widest transition-all flex items-center justify-center gap-2 active:scale-95 shadow-sm"
+            >
+              <ArrowLeft size={16} /> KEMBALI KE MENU AWAL
+            </button>
+          )}
         </form>
 
         <div className="mt-8 pt-6 border-t border-coffee-50 text-center">
-          {(!isForgotPassword && !isForgotUsername && !isRegister) && (
+          {(!isForgotPassword && !isForgotUsername) && (
             <>
               <p className="text-coffee-400 text-xs font-bold tracking-tight">
                 {isRegister ? 'Sudah punya akun?' : 'Belum punya akun?'}
               </p>
               <button 
+                type="button"
                 onClick={() => {
                   setIsRegister(!isRegister);
                   setError('');

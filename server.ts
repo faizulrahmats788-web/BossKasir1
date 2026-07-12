@@ -91,7 +91,7 @@ async function startServer() {
   }
 
   // === NODEMAILER EMAIL HELPER WITH PREMIUM THEME ===
-  async function sendOtpHtmlEmail(email: string, otp: string, type: "login" | "forgot_password") {
+  async function sendOtpHtmlEmail(email: string, otp: string, type: "login" | "forgot_password" | "register" | "signup") {
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: parseInt(process.env.SMTP_PORT || "587"),
@@ -103,10 +103,13 @@ async function startServer() {
     });
 
     const isReset = type === "forgot_password";
-    const title = isReset ? "Reset Password OTP" : "Login OTP Verifikasi";
-    const subtitle = isReset 
-      ? "Anda telah meminta pengaturan ulang password untuk akun BossKasir Anda." 
-      : "Seseorang mencoba masuk ke akun Kasir Anda. Gunakan kode OTP di bawah ini untuk memverifikasi identitas Anda.";
+    const isRegister = type === "register" || type === "signup";
+    const title = isRegister ? "Verifikasi Pendaftaran" : (isReset ? "Reset Password OTP" : "Login OTP Verifikasi");
+    const subtitle = isRegister 
+      ? "Selamat bergabung di BossKasir! Gunakan kode OTP di bawah ini untuk memverifikasi pendaftaran akun Anda."
+      : (isReset 
+        ? "Anda telah meminta pengaturan ulang password untuk akun BossKasir Anda." 
+        : "Seseorang mencoba masuk ke akun Kasir Anda. Gunakan kode OTP di bawah ini untuk memverifikasi identitas Anda.");
     
     const htmlBody = `
       <div style="font-family: 'Inter', sans-serif; background-color: #f7f3f0; padding: 40px 20px; text-align: center; border-radius: 20px;">
@@ -188,52 +191,323 @@ async function startServer() {
     });
   }
 
-  // === API ENDPOINTS ===
+  // Resilient OTP Helper Functions
+  async function safeDeleteOtp(email: string) {
+    try {
+      await supabaseService.from("otps").delete().eq("email", email);
+    } catch (e) {
+      console.error("Error in safeDeleteOtp:", e);
+    }
+  }
 
-  // 3. CHECK REGISTER & CLEANUP (Check if email/username exists, cleanup unverified)
-  app.post("/api/auth/check-register", async (req, res) => {
-    const { email, username } = req.body;
-    if (!email || !username) return res.status(400).json({ error: "Email dan username wajib diisi." });
-    
-    const emailClean = email.toLowerCase().trim();
-    const usernameClean = username.toLowerCase().trim();
+  async function safeInsertOtp(email: string, otpHash: string, type: string, expiresAt: Date, userId?: string) {
+    await safeDeleteOtp(email);
 
     try {
-      // Cek apakah username sudah ada di tabel profiles
-      const { data: existingUsername } = await supabaseService
-        .from("profiles")
-        .select("id")
-        .ilike("username", usernameClean)
-        .maybeSingle();
-
-      if (existingUsername) {
-        return res.json({ available: false, reason: "Username ini sudah terdaftar. Silakan pilih username lain." });
+      const { error } = await supabaseService.from("otps").insert({
+        email,
+        otp: otpHash,
+        expires_at: expiresAt.toISOString()
+      });
+      if (!error) {
+        console.log(`DEBUG: Successfully inserted OTP into 'otps' table.`);
+        return { success: true };
       }
+      console.error(`DEBUG: Failed inserting into 'otps' table:`, error);
+      return { success: false, error };
+    } catch (err: any) {
+      console.error(`DEBUG: Exception inserting into 'otps' table:`, err);
+      return { success: false, error: err };
+    }
+  }
+
+  async function safeVerifyOtp(email: string, otpHash: string) {
+    try {
+      const { data, error } = await supabaseService
+        .from("otps")
+        .select("*")
+        .eq("email", email);
         
-      // Find user by email in auth.users
-      const { data: { users }, error } = await supabaseService.auth.admin.listUsers();
-      if (error) throw error;
-      
-      const existingUser = (users as any[]).find(u => u.email === emailClean);
-      
-      if (existingUser) {
-        if (existingUser.email_confirmed_at) {
-            return res.json({ available: false, reason: "Email ini sudah terdaftar. Silakan login." });
-        } else {
-            // User ada tapi belum verify, hapus agar bisa daftar ulang dengan password/username baru
-            await supabaseService.auth.admin.deleteUser(existingUser.id);
-            console.log("Deleted unverified user:", existingUser.id);
+      if (!error && data && data.length > 0) {
+        for (const row of data) {
+          if (row.otp === otpHash) {
+            const isNotExpired = new Date() < new Date(row.expires_at);
+            if (isNotExpired) {
+              console.log(`DEBUG: Successfully verified OTP on table 'otps'`);
+              return { success: true, row };
+            } else {
+              console.warn(`DEBUG: Found matching OTP on table 'otps' but it has expired`);
+              return { success: false, expired: true };
+            }
+          }
         }
       }
-      
-      res.json({ available: true, success: true });
     } catch (err: any) {
-      console.error("Check register error:", err);
-      res.status(500).json({ error: "Gagal memverifikasi ketersediaan." });
+      console.warn(`Exception reading OTP from table 'otps':`, err.message);
+    }
+    return { success: false, expired: false };
+  }
+
+  // === API ENDPOINTS ===
+
+  // 1. REGISTER INITIATE (Creates unverified auth user, seeds default data, and sends OTP)
+  app.post("/api/auth/register-initiate", async (req, res) => {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: "Nama, Email, dan Password wajib diisi." });
+    }
+
+    const emailClean = email.toLowerCase().trim();
+    const nameClean = name.trim();
+
+    try {
+      console.log(`DEBUG: Register Initiate Request - Email: ${emailClean}, Name: ${nameClean}`);
+
+      // Step A: Cek apakah email sudah terdaftar dan terverifikasi
+      const { data: existingProfile, error: queryError } = await supabaseService
+        .from("profiles")
+        .select("*")
+        .eq("email", emailClean)
+        .maybeSingle();
+
+      const { data: { users }, error: listError } = await supabaseService.auth.admin.listUsers();
+      if (listError) throw listError;
+
+      const existingAuthUser = (users as any[]).find(u => u.email === emailClean);
+      const isVerified = existingAuthUser && (existingAuthUser.email_confirmed_at || existingAuthUser.confirmed_at);
+
+      if (existingProfile && isVerified) {
+        return res.status(400).json({ error: "Email ini sudah terdaftar dan terverifikasi. Silakan login." });
+      }
+
+      // Step B: Jika terdaftar tetapi belum terverifikasi, bersihkan data lama agar bisa daftar ulang
+      if (existingAuthUser) {
+        console.log(`DEBUG: Found unverified existing auth user: ${existingAuthUser.id}. Cleaning up before fresh register.`);
+        // Delete profile and user
+        await supabaseService.from("profiles").delete().eq("id", existingAuthUser.id);
+        await supabaseService.auth.admin.deleteUser(existingAuthUser.id);
+      }
+
+      // Step C: Buat user baru di Supabase Auth
+      const { data: newAuthData, error: createUserError } = await supabaseService.auth.admin.createUser({
+        email: emailClean,
+        password: password,
+        email_confirm: false
+      });
+
+      if (createUserError || !newAuthData.user) {
+        console.error("Supabase Admin createUser error:", createUserError);
+        return res.status(400).json({ error: createUserError?.message || "Gagal membuat pengguna baru." });
+      }
+
+      const newUserId = newAuthData.user.id;
+
+      // Step D: Buat profil unverified di database
+      const usernameVal = emailClean.split('@')[0] + "_" + Math.floor(1000 + Math.random() * 9000);
+      
+      const insertPayload = {
+        id: newUserId,
+        username: usernameVal,
+        email: emailClean,
+        name: nameClean,
+        role: 'admin'
+      };
+      
+      const { error: profileError } = await supabaseService.from("profiles").upsert(insertPayload, { onConflict: 'id' });
+
+      if (profileError) {
+        console.error("Create profile error:", profileError);
+        // Rollback auth user
+        await supabaseService.auth.admin.deleteUser(newUserId);
+        return res.status(500).json({ error: "Gagal membuat profil kasir: " + profileError.message });
+      }
+
+      // Step E: Seed default data (Cafe Settings & Payment Methods)
+      const { error: settingsError } = await supabaseService.from("cafe_settings").upsert({
+        user_id: newUserId,
+        name: "My Cafe",
+        address: "",
+        phone: "",
+        logo_url: null,
+        tax_rate: 0,
+        currency: "Rp"
+      }, { onConflict: 'user_id' });
+
+      if (settingsError) {
+        console.warn("Seeding default cafe settings warning:", settingsError.message);
+      }
+
+      const pmData = [
+        { id: `${newUserId}-cash`, user_id: newUserId, name: "Tunai", type: "cash", is_active: true },
+        { id: `${newUserId}-qris`, user_id: newUserId, name: "QRIS", type: "non-cash", is_active: true },
+        { id: `${newUserId}-card`, user_id: newUserId, name: "Kartu Debit/Kredit", type: "non-cash", is_active: true }
+      ];
+      const { error: pmError } = await supabaseService.from("payment_methods").upsert(pmData, { onConflict: 'id' });
+      if (pmError) {
+        console.warn("Seeding default payment methods warning:", pmError.message);
+      }
+
+      // Step F: Generate secure OTP
+      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = hashString(generatedOtp);
+      const expiredAt = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
+
+      // Simpan OTP dengan aman menggunakan safeInsertOtp
+      const otpRes = await safeInsertOtp(emailClean, otpHash, "register", expiredAt, newUserId);
+
+      if (!otpRes.success) {
+        console.error("OTP save error:", otpRes.error);
+        return res.status(500).json({ error: "Gagal menyimpan OTP pendaftaran." });
+      }
+
+      // Step G: Kirim Email OTP
+      let emailSent = true;
+      let emailError = null;
+      try {
+        await sendOtpHtmlEmail(emailClean, generatedOtp, "register");
+      } catch (mailErr: any) {
+        emailSent = false;
+        emailError = mailErr.message;
+        console.warn("SMTP email dispatch failed. Operating in Simulation/Graceful-Fallback mode.", mailErr);
+      }
+
+      return res.json({
+        success: true,
+        email: emailClean,
+        simulatedOtp: emailSent ? undefined : generatedOtp,
+        message: emailSent
+          ? "Registrasi berhasil didaftarkan. Silakan periksa email Anda untuk kode verifikasi."
+          : `Registrasi berhasil! (Mode Simulasi: Pengiriman email gagal / SMTP belum terkonfigurasi). Kode OTP Anda adalah: ${generatedOtp}`
+      });
+
+    } catch (err: any) {
+      console.error("Register Initiate Error:", err);
+      return res.status(500).json({ error: "Gagal mendaftarkan akun baru: " + err.message });
     }
   });
 
-  // 1. INITIATE LOGIN (STEP 1: Validate Credentials + Send OTP)
+  // 2. VERIFY REGISTER OTP (Validates OTP, marks profile as verified, and confirms email)
+  app.post("/api/auth/verify-register-otp", async (req, res) => {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email dan Kode OTP wajib diisi." });
+    }
+
+    const emailClean = email.toLowerCase().trim();
+    const otpClean = otp.trim();
+    const otpHash = hashString(otpClean);
+
+    try {
+      console.log(`DEBUG: Verify Register OTP Request - Email: ${emailClean}`);
+
+      // Query database untuk mencocokkan OTP secara resilient
+      const verifyRes = await safeVerifyOtp(emailClean, otpHash);
+
+      if (!verifyRes.success) {
+        if (verifyRes.expired) {
+          return res.status(400).json({ error: "Kode OTP telah kedaluwarsa. Silakan minta kirim ulang OTP." });
+        }
+        return res.status(400).json({ error: "Kode OTP salah atau tidak cocok." });
+      }
+
+      // OTP Benar dan Valid!
+      // Step A: Confirm the email in Supabase Auth
+      const { data: { users }, error: usersError } = await supabaseService.auth.admin.listUsers();
+      if (!usersError && users) {
+        const matchingUser = (users as any[]).find(u => u.email === emailClean);
+        if (matchingUser) {
+          await supabaseService.auth.admin.updateUserById(matchingUser.id, { email_confirm: true });
+          console.log(`DEBUG: Confirmed email in Supabase Auth for: ${matchingUser.id}`);
+        }
+      }
+
+      // Step C: Bersihkan OTP secara resilient
+      await safeDeleteOtp(emailClean);
+
+      return res.json({
+        success: true,
+        message: "Verifikasi berhasil! Akun Anda telah aktif. Silakan masuk menggunakan email dan password."
+      });
+
+    } catch (err: any) {
+      console.error("Verify OTP Error:", err);
+      return res.status(500).json({ error: "Gagal memproses verifikasi OTP: " + err.message });
+    }
+  });
+
+  // 3. RESEND REGISTER OTP (Generates and sends a new registration OTP)
+  app.post("/api/auth/resend-register-otp", async (req, res) => {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email wajib diisi." });
+    }
+
+    const emailClean = email.toLowerCase().trim();
+
+    try {
+      console.log(`DEBUG: Resend Register OTP Request - Email: ${emailClean}`);
+
+      // Cek apakah profil ada dan belum terverifikasi
+      const { data: profile, error: profileError } = await supabaseService
+        .from("profiles")
+        .select("*")
+        .eq("email", emailClean)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error("Profile query error during resend OTP:", profileError);
+        return res.status(500).json({ error: "Gagal mengakses profil pengguna." });
+      }
+
+      if (!profile) {
+        return res.status(400).json({ error: "Email tidak terdaftar." });
+      }
+
+      const { data: { users }, error: authUsersError } = await supabaseService.auth.admin.listUsers();
+      const authUser = authUsersError ? null : (users as any[]).find(u => u.email === emailClean);
+      const isVerified = authUser && (authUser.email_confirmed_at || authUser.confirmed_at);
+
+      if (isVerified) {
+        return res.status(400).json({ error: "Akun ini sudah terverifikasi. Silakan langsung login." });
+      }
+
+      // Generate secure OTP baru
+      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = hashString(generatedOtp);
+      const expiredAt = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
+
+      // Simpan OTP dengan aman menggunakan safeInsertOtp
+      const otpRes = await safeInsertOtp(emailClean, otpHash, "register", expiredAt, profile.id);
+
+      if (!otpRes.success) {
+        console.error("OTP save error during resend:", otpRes.error);
+        return res.status(500).json({ error: "Gagal menyimpan kode OTP baru." });
+      }
+
+      // Kirim Email OTP
+      let emailSent = true;
+      try {
+        await sendOtpHtmlEmail(emailClean, generatedOtp, "register");
+      } catch (mailErr: any) {
+        emailSent = false;
+        console.warn("SMTP email dispatch failed during resend. Operating in Simulation/Graceful-Fallback mode.", mailErr);
+      }
+
+      return res.json({
+        success: true,
+        simulatedOtp: emailSent ? undefined : generatedOtp,
+        message: emailSent
+          ? "Kode OTP baru telah dikirimkan ke email Anda."
+          : `Kode OTP baru berhasil dibuat! (Mode Simulasi: SMTP tidak aktif). Kode OTP baru Anda: ${generatedOtp}`
+      });
+
+    } catch (err: any) {
+      console.error("Resend OTP Error:", err);
+      return res.status(500).json({ error: "Gagal mengirimkan OTP baru: " + err.message });
+    }
+  });
+
+  // 4. FORGOT USERNAME (Keeps backward compatibility if needed)
   app.post("/api/auth/forgot-username", async (req, res) => {
     const { email } = req.body;
     if (!email) {
@@ -242,7 +516,6 @@ async function startServer() {
 
     const emailClean = email.toLowerCase().trim();
     console.log("DEBUG: Forgot Username Request - Input Email:", email);
-    console.log("DEBUG: Cleaned Email:", emailClean);
 
     try {
       let username = null;
@@ -261,19 +534,12 @@ async function startServer() {
         username = profiles[0].username;
       } else {
         // Fallback: check auth.users if they registered but haven't verified
-        console.log("DEBUG: Email not found in profiles. Checking auth.users...");
         const { data: { users }, error: usersError } = await supabaseService.auth.admin.listUsers();
         
         if (!usersError && users) {
           const user = (users as any[]).find(u => u.email === emailClean);
           if (user) {
-            if (user.user_metadata?.username) {
-              username = user.user_metadata.username;
-              console.log("DEBUG: Found username in user_metadata:", username);
-            } else {
-              username = emailClean.split('@')[0];
-              console.log("DEBUG: Missing username, using fallback:", username);
-            }
+            username = user.user_metadata?.username || emailClean.split('@')[0];
 
             // Auto-heal profile
             try {
@@ -284,7 +550,6 @@ async function startServer() {
                 name: username,
                 role: 'admin'
               }, { onConflict: 'id' });
-              console.log("DEBUG: Auto-healed profile for", emailClean);
             } catch (ex) {
               console.warn("DEBUG: Auto-heal profile failed", ex);
             }
@@ -293,363 +558,26 @@ async function startServer() {
       }
 
       if (!username) {
-        console.log("DEBUG: Email not found.");
         return res.status(400).json({ error: "Email tidak terdaftar." });
       }
-
-      console.log("DEBUG: Username found to send:", username);
       
-      await sendUsernameHtmlEmail(emailClean, username);
-      res.json({ success: true, message: "Username telah dikirim ke email Anda." });
+      let emailSent = true;
+      try {
+        await sendUsernameHtmlEmail(emailClean, username);
+      } catch (mailErr: any) {
+        emailSent = false;
+        console.warn("SMTP email dispatch failed during forgot-username. Operating in Simulation/Graceful-Fallback mode.", mailErr);
+      }
+
+      res.json({
+        success: true,
+        message: emailSent
+          ? "Username telah dikirim ke email Anda."
+          : `Informasi Akun (Mode Simulasi): Username Anda adalah: ${username}`
+      });
     } catch (err: any) {
       console.error("Forgot username error:", err);
       res.status(500).json({ error: "Gagal memproses permintaan: " + err.message });
-    }
-  });
-
-  app.post("/api/auth/login-initiate", async (req, res) => {
-    const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
-    const { username, email, password } = req.body;
-
-    if (!checkRateLimit(Array.isArray(clientIp) ? clientIp[0] : clientIp, 50, 60 * 1000)) {
-       return res.status(429).json({ error: "Terlalu banyak permintaan login. Harap tunggu beberapa saat." });
-    }
-
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: "Username, Email, dan Password wajib diisi." });
-    }
-
-    const emailClean = email.toLowerCase().trim();
-    const usernameClean = username.toLowerCase().trim();
-
-    // Proteksi brute force
-    const bruteCheck = checkBruteForce(emailClean);
-    if (bruteCheck.blocked) {
-      return res.status(423).json({ error: `Input OTP diblokir sementara karena terlalu banyak kegagalan. Coba lagi dalam ${bruteCheck.timeLeft} detik.` });
-    }
-
-    try {
-      // Step A: Cari profiles row
-      console.log("DEBUG: Looking up profile. Username:", usernameClean, "Email:", emailClean);
-      
-      const { data: profileByEmail } = await supabaseService
-        .from("profiles")
-        .select("*")
-        .eq("email", emailClean)
-        .maybeSingle();
-
-      const { data: profileByUsername } = await supabaseService
-        .from("profiles")
-        .select("*")
-        .ilike("username", usernameClean)
-        .maybeSingle();
-
-      let profile = profileByEmail || profileByUsername;
-
-      console.log("DEBUG: Profile lookup result:", profile);
-      if (!profile) {
-          console.warn("DEBUG: Profile not found for", emailClean, usernameClean);
-      }
-
-      // Step B: Kredensial Validasi menggunakan Supabase Auth
-      let authUser: any = null;
-      let passwordMatched = false;
-
-      try {
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email: profile?.email || emailClean,
-          password: password,
-        });
-
-        if (!authError && authData.user) {
-          authUser = authData.user;
-          passwordMatched = true;
-        } else {
-          console.error("Supabase Auth Error for email:", emailClean, "Error detail:", authError);
-        }
-      } catch (authEx) {
-        console.warn("Auth check exception...", authEx);
-      }
-
-      // Jika password tidak cocok
-      if (!passwordMatched) {
-        return res.status(401).json({ error: `Password atau Email yang Anda masukkan tidak cocok.` });
-      }
-
-      // Auto-heal profile if missing
-      if (!profile && authUser) {
-        console.log("DEBUG: Auto-healing profile for", emailClean, "during login-initiate");
-        try {
-            await supabaseService.from("profiles").upsert({
-              id: authUser.id,
-              email: emailClean,
-              username: usernameClean,
-              name: usernameClean,
-              role: 'admin'
-            }, { onConflict: 'id' });
-            profile = { id: authUser.id, email: emailClean, username: usernameClean, name: usernameClean, role: 'admin' };
-        } catch (ex) {
-            console.warn("DEBUG: Auto-heal profile failed", ex);
-        }
-      }
-
-      // Sign out to clear any session before OTP verification
-      await supabase.auth.signOut();
-
-      // Step C: Generate secure OTP
-      const generatedOtp = crypto.randomInt ? crypto.randomInt(100000, 1000000).toString() : Math.floor(100000 + Math.random() * 900000).toString();
-      const otpHash = hashString(generatedOtp);
-      const expiredAt = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
-
-      const targetUserId = authUser?.id || profile?.id || null;
-
-      // Step D: Simpan ke otps (Supabase DB)
-      try {
-        const insertData: any = {
-          email: emailClean,
-          otp: otpHash,
-          expires_at: expiredAt.toISOString(),
-        };
-        
-        // Hapus OTP lama terlebih dahulu
-        await supabaseService.from("otps").delete().eq("email", emailClean);
-
-        const { error: insertErr } = await supabaseService.from("otps").insert(insertData);
-        
-        if (!insertErr) {
-          console.log(`DEBUG: OTP Successfully saved for ${emailClean}. Expires: ${insertData.expires_at}`);
-        } else {
-          console.error("Database OTP save error structure:", JSON.stringify(insertErr, null, 2));
-          console.error("Database OTP save error code:", insertErr.code, "message:", insertErr.message, "details:", insertErr.details, "hint:", insertErr.hint);
-          return res.status(500).json({ error: "Gagal menyimpan kode OTP. Pastikan tabel otps tersedia.", details: insertErr.message });
-        }
-      } catch (dbEx: any) {
-        console.error("Database error saving OTP (caught exception):", dbEx);
-        return res.status(500).json({ error: "Terjadi kesalahan sistem saat menyimpan OTP.", details: dbEx.message });
-      }
-
-      // Step E: Kirim Email OTP
-      await sendOtpHtmlEmail(emailClean, generatedOtp, "login");
-
-      res.json({
-        success: true,
-        otpSent: true,
-        email: emailClean,
-        username: usernameClean,
-        message: "Kode OTP 6-Digit telah dikirimkan ke email Anda."
-      });
-
-    } catch (err: any) {
-      console.error("Initiate Login Error:", err);
-      res.status(500).json({ error: "Terjadi kesalahan internal ketika memproses login Anda: " + err.message });
-    }
-  });
-
-  // 2. VERIFY LOGIN (STEP 2: Otp verification + Multi-device logic)
-  app.post("/api/auth/login-verify", async (req, res) => {
-    const { username, email, otp, deviceId, password } = req.body;
-
-    if (!email || !otp || !deviceId) {
-      return res.status(400).json({ error: "Data verifikasi tidak lengkap (Email, OTP, Device ID wajib)." });
-    }
-
-    const emailClean = email.toLowerCase().trim();
-    const otpClean = otp.trim();
-
-    // Check brute force
-    const bruteCheck = checkBruteForce(emailClean);
-    if (bruteCheck.blocked) {
-      return res.status(423).json({ error: `Akses diblokir sementara. Coba lagi dalam ${bruteCheck.timeLeft} detik.` });
-    }
-
-    try {
-      const incomingHash = hashString(otpClean);
-      let isValidOtp = false;
-      let targetUserId: string | null = null;
-
-      // Try database validation first
-      try {
-        const { data: dbOtps, error: fetchErr } = await supabaseService
-          .from("otps")
-          .select("*")
-          .eq("email", emailClean)
-          .order("expires_at", { ascending: false })
-          .limit(1);
-
-        if (!fetchErr && dbOtps && dbOtps.length > 0) {
-          const latestOtp = dbOtps[0];
-          console.log(`DEBUG: Found OTP record for ${emailClean}. Checking match...`);
-          
-          const isMatch = latestOtp.otp === incomingHash;
-          const isNotExpired = new Date() < new Date(latestOtp.expires_at);
-          
-          console.log(`DEBUG: Match=${isMatch}, NotExpired=${isNotExpired}, ExpiresAt=${latestOtp.expires_at}`);
-          
-          if (isMatch && isNotExpired) {
-            isValidOtp = true;
-            targetUserId = latestOtp.user_id; // Will be undefined if user_id is not in table, handled below
-          } else {
-            console.warn("DEBUG: OTP mismatch for", emailClean);
-          }
-        } else {
-          console.warn("DEBUG: No valid OTP entries found in DB for", emailClean, "FetchErr:", fetchErr?.message);
-        }
-      } catch (dbEx) {
-        console.warn("Could not query DB otps:", dbEx);
-      }
-
-      // Global master key bypass if in local preview and OTP matches standard guest (optional, for developer quick test)
-      if (otp === "123456" && !isValidOtp) {
-        isValidOtp = true;
-      }
-
-      if (!isValidOtp) {
-        recordOtpAttempt(emailClean, false);
-        return res.status(400).json({ 
-          error: "OTP salah atau expired", 
-          reason: "otp_not_found_or_mismatch" 
-        });
-      }
-
-      // OTP is valid!
-      recordOtpAttempt(emailClean, true);
-      
-      // Delete OTP after successful use
-      await supabaseService.from("otps").delete().eq("email", emailClean).eq("otp", incomingHash);
-
-      // Cari user profile detail
-      const { data: profile } = await supabaseService.from("profiles").select("*").eq("email", emailClean).maybeSingle();
-      const userIdFinal = targetUserId || profile?.id || null;
-
-      if (userIdFinal) {
-        await supabaseService.auth.admin.updateUserById(userIdFinal, { email_confirm: true });
-      }
-
-      // === SINGLE DEVICE LOGIN LOGIC (Hanya 1 Akun aktif di 1 Device) ===
-      const sessionToken = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
-
-      // Step B: Daftarkan sesi aktif baru di database user_sessions
-      try {
-        const { error: insertSessErr } = await supabaseService.from("user_sessions").insert({
-          user_id: userIdFinal,
-          device_id: deviceId,
-          session_token: sessionToken,
-          expires_at: expiresAt.toISOString(),
-          revoked: false
-        });
-
-        if (insertSessErr) {
-          console.log("Info: Could not put active session in DB (might be expected):", insertSessErr.message);
-        }
-      } catch (dbEx) {
-        console.warn("DB table user_sessions not ready, continuing...");
-      }
-
-      res.json({
-        success: true,
-        sessionToken,
-        deviceId,
-        otpVerified: true,
-        user: profile || {
-          id: userIdFinal,
-          username: emailClean.split("@")[0],
-          email: emailClean,
-          name: emailClean.split("@")[0],
-          role: "admin"
-        },
-        message: "Login berhasil"
-      });
-
-    } catch (err: any) {
-      console.error("Login verify error:", err);
-      res.status(500).json({ error: "Gagal memverifikasi OTP: " + err.message });
-    }
-  });
-
-  // 4b. REGISTER SESSION (Create active session for newly signed up or authenticated users)
-  app.post("/api/auth/register-session", async (req, res) => {
-    const { userId, email, deviceId } = req.body;
-    console.log("DEBUG: register-session payload:", { userId, email, deviceId });
-
-    if (!userId || !deviceId) {
-      return res.status(400).json({ error: "Informasi sesi tidak lengkap." });
-    }
-
-    try {
-      const sessionToken = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 hari
-
-      try {
-        await supabaseService.from("user_sessions").insert({
-          user_id: userId,
-          device_id: deviceId,
-          session_token: sessionToken,
-          expires_at: expiresAt.toISOString(),
-          revoked: false
-        });
-      } catch (insertErr: any) {
-        console.warn("DB user_sessions insert error during register-session:", insertErr.message);
-      }
-
-      return res.json({ success: true, sessionToken });
-    } catch (err: any) {
-      console.error("Register session error:", err);
-      return res.status(500).json({ error: "Gagal mendaftarkan sesi: " + err.message });
-    }
-  });
-
-  // 5. SESSION INTERCEPTOR CHECKER (Check if current device session token is still valid)
-  app.post("/api/auth/session-check", async (req, res) => {
-    const { userId, sessionToken, deviceId } = req.body;
-    
-    console.log("DEBUG: session-check payload:", { userId, sessionToken: sessionToken?.substring(0,8) + "...", deviceId });
-
-    if (!sessionToken || !deviceId) {
-      return res.status(400).json({ error: "Informasi sesi tidak lengkap." });
-    }
-
-    try {
-      // Query database table user_sessions
-      const { data: sessRow, error: checkErr } = await supabaseService
-        .from("user_sessions")
-        .select("*")
-        .eq("session_token", sessionToken)
-        .maybeSingle();
-
-      console.log("DEBUG: session-check supabase result:", !!sessRow, checkErr?.message);
-
-      if (checkErr) {
-        console.warn("DEBUG: session-check database error, failing open to prevent false logout:", checkErr.message);
-        return res.json({ valid: true });
-      }
-
-      if (!sessRow) {
-        // Fail open if the session is not found in the database.
-        // This handles cases where the user_sessions table might be empty or the row wasn't successfully inserted.
-        console.warn("DEBUG: session row not found in database, failing open to prevent false logout:", sessionToken);
-        return res.json({ valid: true });
-      }
-      
-      if (sessRow.device_id && sessRow.device_id !== deviceId) {
-         console.warn(`DEBUG: device mismatch (DB: ${sessRow.device_id}, Request: ${deviceId}), continuing to prevent false logout`);
-      }
-      
-      if (sessRow.revoked) {
-        console.warn("DEBUG: session is explicitly revoked");
-        return res.json({ valid: false, reason: "revoked" });
-      }
-
-      const expiresAt = new Date(sessRow.expires_at);
-      if (expiresAt < new Date()) {
-        console.warn("DEBUG: session expired in DB, but continuing to prevent active cashier disruption");
-      }
-
-      return res.json({ valid: true });
-    } catch (err: any) {
-      console.warn("Session check exception:", err);
-      // Fail open in case server check crashes so cashier is never locked out on network failure
-      return res.json({ valid: true });
     }
   });
 

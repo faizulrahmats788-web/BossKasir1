@@ -30,7 +30,15 @@ const Navbar: React.FC<NavbarProps> = ({ activeView, setActiveView, logoUrl }) =
     <nav className="bg-white border-b border-coffee-100 px-6 py-4 flex items-center justify-between shadow-sm sticky top-0 z-50">
       <div className="flex items-center gap-3">
         {cafeLogo ? (
-          <img src={cafeLogo} alt="Logo" className="h-10 w-10 object-cover rounded-xl" />
+          <img 
+            src={cafeLogo} 
+            alt="Logo" 
+            className="h-10 w-10 object-cover rounded-xl" 
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+            }}
+          />
         ) : (
           <div className="p-2 bg-coffee-800 rounded-xl text-cream-50">
             <Coffee size={24} />

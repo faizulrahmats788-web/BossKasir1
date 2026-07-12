@@ -18,9 +18,11 @@ interface AppContextType {
   dbWarning: string | null;
   theme: 'light' | 'dark';
   
-  login: (identifier: string, password?: string) => Promise<{success: boolean, error?: string}>;
+  login: (identifier: string, password?: string) => Promise<{success: boolean, error?: string, isUnverified?: boolean, email?: string}>;
   loginVerifyOtp: (username: string, email: string, otp: string, password?: string) => Promise<boolean>;
-  register: (username: string, password?: string, email?: string) => Promise<{success: boolean, error?: string}>;
+  register: (name: string, email?: string, password?: string) => Promise<{success: boolean, error?: string, email?: string}>;
+  verifyRegisterOtp: (email: string, otp: string) => Promise<{success: boolean, error?: string}>;
+  resendRegisterOtp: (email: string) => Promise<{success: boolean, error?: string}>;
   sendOtp: (username: string, email: string) => Promise<void>;
   logout: () => void;
   clearAuthError: () => void;
@@ -376,7 +378,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabase.from('payment_methods').select('*').eq('user_id', user.id)
         ]);
         
-        if (pRes.data && pRes.data.length > 0) {
+        if (pRes.data) {
           const mappedProducts = pRes.data.map((p: any) => ({
             id: p.id,
             name: p.name,
@@ -387,9 +389,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }));
           setProducts(mappedProducts);
           localStorage.setItem('pos_products', JSON.stringify(mappedProducts));
+        } else {
+          setProducts([]);
+          localStorage.setItem('pos_products', JSON.stringify([]));
         }
 
-        if (dRes.data && dRes.data.length > 0) {
+        if (dRes.data) {
           const mappedDiscounts = dRes.data.map((d: any) => ({
             id: d.id,
             name: d.name,
@@ -401,9 +406,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }));
           setDiscounts(mappedDiscounts);
           localStorage.setItem('pos_discounts', JSON.stringify(mappedDiscounts));
+        } else {
+          setDiscounts([]);
+          localStorage.setItem('pos_discounts', JSON.stringify([]));
         }
 
-        if (sRes.data && sRes.data.length > 0) {
+        if (sRes.data) {
           const mappedSales = sRes.data.map((s: any) => {
             const rawItems = s.sale_items || [];
             const mappedItems = rawItems.map((item: any) => ({
@@ -432,9 +440,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
           setSales(mappedSales);
           localStorage.setItem('pos_sales', JSON.stringify(mappedSales));
+        } else {
+          setSales([]);
+          localStorage.setItem('pos_sales', JSON.stringify([]));
         }
 
-        if (lRes.data && lRes.data.length > 0) {
+        if (lRes.data) {
           const mappedLogs = lRes.data.map((l: any) => ({
             id: l.id,
             productId: l.product_id || l.productId,
@@ -445,6 +456,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }));
           setInventoryLogs(mappedLogs);
           localStorage.setItem('pos_inventory_logs', JSON.stringify(mappedLogs));
+        } else {
+          setInventoryLogs([]);
+          localStorage.setItem('pos_inventory_logs', JSON.stringify([]));
         }
 
         let settingsData = sSetRes.data;
@@ -486,8 +500,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           localStorage.setItem('pos_settings', JSON.stringify(mappedSettings));
         }
 
-        if (pmRes.data && pmRes.data.length > 0) {
-          const mappedPm = pmRes.data.map((pm: any) => ({
+        let pmDataRows = pmRes.data;
+        if (pmDataRows && pmDataRows.length === 0) {
+          console.log("No payment methods found, seeding defaults...");
+          const pmData = INITIAL_PAYMENT_METHODS.map(pm => ({
+            id: `${user.id}-${pm.id}`,
+            user_id: user.id,
+            name: pm.name,
+            type: pm.type,
+            is_active: pm.isActive
+          }));
+          const { data: insertedPm, error: insertError } = await supabase.from('payment_methods').insert(pmData).select();
+          if (!insertError && insertedPm) {
+            pmDataRows = insertedPm;
+          }
+        }
+
+        if (pmDataRows && pmDataRows.length > 0) {
+          const mappedPm = pmDataRows.map((pm: any) => ({
             id: pm.id,
             name: pm.name,
             type: pm.type,
@@ -495,6 +525,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }));
           setPaymentMethods(mappedPm);
           localStorage.setItem('pos_payment_methods', JSON.stringify(mappedPm));
+        } else {
+          setPaymentMethods([]);
+          localStorage.setItem('pos_payment_methods', JSON.stringify([]));
         }
       } catch (err) {
         console.warn("Could not fetch cloud data, utilizing local storage cache instead:", err);
@@ -549,6 +582,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 2. Payment Methods - Standard defaults
       const pmData = INITIAL_PAYMENT_METHODS.map(pm => {
         return {
+          id: `${userId}-${pm.id}`,
           user_id: userId,
           name: pm.name,
           type: pm.type,
@@ -584,86 +618,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await seedUserData(user.id);
   };
 
-  const register = async (username: string, password?: string, email?: string) => {
+  const register = async (name: string, email?: string, password?: string) => {
     setAuthError(null);
     setIsLoading(true);
     
-    if (!username || !email || !password) {
-      setAuthError("Username, email, dan password wajib diisi");
+    if (!name || !email || !password) {
+      setAuthError("Nama, email, dan password wajib diisi");
       setIsLoading(false);
-      return { success: false, error: "Username, email, dan password wajib diisi" };
+      return { success: false, error: "Nama, email, dan password wajib diisi" };
     }
 
     try {
       const emailValue = email.toLowerCase().trim();
+      const nameValue = name.trim();
       
-      // 1. Cek apakah email/username sudah terdaftar
-      const checkRes = await fetch('/api/auth/check-register', {
+      const checkRes = await fetch('/api/auth/register-initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailValue, username: username.trim() })
+        body: JSON.stringify({ name: nameValue, email: emailValue, password })
       });
-      
-      if (!checkRes.ok) {
-         setAuthError("Gagal memeriksa ketersediaan pendaftaran.");
-         setIsLoading(false);
-         return { success: false, error: "Gagal memeriksa ketersediaan pendaftaran." };
-      }
       
       const checkData = await checkRes.json();
-      if (checkData.available === false) {
-         setAuthError(checkData.reason || "Pendaftaran tidak dapat dilanjutkan.");
+      if (!checkRes.ok) {
+         setAuthError(checkData.error || "Gagal mendaftar.");
          setIsLoading(false);
-         return { success: false, error: checkData.reason || "Pendaftaran tidak dapat dilanjutkan." };
-      }
-      
-      // 2. signUp menggunakan email dan password
-      const { data, error } = await supabase.auth.signUp({
-        email: emailValue,
-        password: password,
-        options: {
-          data: {
-            username: username,
-            name: username,
-            role: 'admin'
-          }
-        }
-      });
-
-      if (error) {
-        if (error.message.includes("rate limit") || error.message.includes("Too many") || error.message.includes("security purposes")) {
-          throw new Error("Terlalu banyak percobaan. Silakan tunggu beberapa menit.");
-        }
-        throw error;
-      }
-      
-      // 3. Pastikan profil terbuat di tabel 'profiles'
-      if (data.user) {
-        const { error: profileError } = await supabase.from('profiles').insert({
-          id: data.user.id,
-          username: username,
-          email: emailValue,
-          name: username,
-          role: 'admin'
-        });
-        
-        await supabase.from('cafe_settings').insert({
-          user_id: data.user.id,
-          name: "My Cafe",
-          address: "",
-          phone: "",
-          logo_url: null,
-          tax_rate: 0,
-          currency: "IDR"
-        });
-        if (profileError) {
-          console.error("Gagal membuat profil user:", profileError);
-          // Kita tetap lanjut karena auth berhasil, user bisa mencoba login nanti dan sistem akan mem-heal profilnya
-        }
+         return { success: false, error: checkData.error || "Gagal mendaftar." };
       }
       
       setIsLoading(false);
-      return { success: true };
+      return { success: true, email: emailValue, simulatedOtp: checkData.simulatedOtp };
     } catch (error: any) {
       console.error("Registration initiation error:", error);
       const msg = error.message || "Gagal mendaftar.";
@@ -673,15 +656,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const verifyRegisterOtp = async (email: string, otp: string) => {
+    setAuthError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/verify-register-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase().trim(), otp: otp.trim() })
+      });
+
+      const resData = await res.json();
+      if (!res.ok) {
+        setAuthError(resData.error || "Kode OTP salah.");
+        setIsLoading(false);
+        return { success: false, error: resData.error || "Kode OTP salah." };
+      }
+
+      setIsLoading(false);
+      return { success: true };
+    } catch (error: any) {
+      console.error("OTP verification failed:", error);
+      setAuthError(error.message || "Verifikasi OTP Gagal.");
+      setIsLoading(false);
+      return { success: false, error: error.message || "Verifikasi OTP Gagal." };
+    }
+  };
+
+  const resendRegisterOtp = async (email: string) => {
+    setAuthError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/resend-register-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase().trim() })
+      });
+
+      const resData = await res.json();
+      if (!res.ok) {
+        setAuthError(resData.error || "Gagal mengirim ulang OTP.");
+        setIsLoading(false);
+        return { success: false, error: resData.error || "Gagal mengirim ulang OTP." };
+      }
+
+      setIsLoading(false);
+      return { success: true, simulatedOtp: resData.simulatedOtp };
+    } catch (error: any) {
+      console.error("Resend OTP failed:", error);
+      setAuthError(error.message || "Gagal mengirim ulang OTP.");
+      setIsLoading(false);
+      return { success: false, error: error.message || "Gagal mengirim ulang OTP." };
+    }
+  };
+
   const login = async (identifier: string, password?: string) => {
     setAuthError(null);
     setIsLoading(true);
 
     try {
       if (!identifier) {
-        setAuthError("Username atau Email wajib diisi.");
+        setAuthError("Email wajib diisi.");
         setIsLoading(false);
-        return { success: false, error: "Username atau Email wajib diisi." };
+        return { success: false, error: "Email wajib diisi." };
       }
       if (!password) {
         setAuthError("Password wajib diisi.");
@@ -689,29 +728,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: "Password wajib diisi." };
       }
 
-      const idClean = identifier.trim().toLowerCase();
-      let emailToLogin = idClean;
-
-      // Check if identifier is username or email
-      if (!idClean.includes('@')) {
-        // Query profiles table for the username
-        const { data: profile, error: profileErr } = await supabase
-          .from('profiles')
-          .select('email')
-          .eq('username', idClean)
-          .maybeSingle();
-
-        if (profileErr) {
-          console.error("Error querying profiles for username:", profileErr);
-        }
-
-        if (!profile || !profile.email) {
-          setAuthError("Username tidak ditemukan");
-          setIsLoading(false);
-          return { success: false, error: "Username tidak ditemukan" };
-        }
-        emailToLogin = profile.email;
-      }
+      const emailToLogin = identifier.trim().toLowerCase();
 
       // Perform signInWithPassword
       const { data, error: loginErr } = await supabase.auth.signInWithPassword({
@@ -751,13 +768,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn("Could not fetch profile during login:", profileErr);
       }
 
+      // BLOKIR LOGIN JIKA BELUM VERIFIKASI
+      if (profile && profile.is_verified === false) {
+        await supabase.auth.signOut();
+        setAuthError("Akun belum diverifikasi. Silakan verifikasi OTP terlebih dahulu.");
+        setIsLoading(false);
+        return { 
+          success: false, 
+          isUnverified: true, 
+          email: emailToLogin, 
+          error: "Akun belum diverifikasi. Silakan verifikasi OTP terlebih dahulu." 
+        };
+      }
+
       const baseUser: User = {
         id: data.user.id,
         username: profile?.username || data.user.email?.split('@')[0] || 'user',
         email: data.user.email || '',
         name: profile?.name || data.user.user_metadata?.full_name || 'User',
         role: profile?.role || 'admin',
-        email_confirmed_at: data.user.email_confirmed_at || null
+        email_confirmed_at: data.user.email_confirmed_at || null,
+        is_verified: profile?.is_verified ?? true
       };
 
       setUser(baseUser);
@@ -1625,7 +1656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       user, products, discounts, sales, inventoryLogs, cart, settings, paymentMethods, isLoading, authError, dbWarning, theme,
-      login, loginVerifyOtp, register, sendOtp, logout, clearAuthError, clearDbWarning, toggleTheme, addToCart, removeFromCart, updateCartQuantity, updateCartNote, clearCart,
+      login, loginVerifyOtp, register, verifyRegisterOtp, resendRegisterOtp, sendOtp, logout, clearAuthError, clearDbWarning, toggleTheme, addToCart, removeFromCart, updateCartQuantity, updateCartNote, clearCart,
       processTransaction, addProduct, updateProduct, deleteProduct,
       addDiscount, updateDiscount, deleteDiscount,
       updateSettings, addPaymentMethod, updatePaymentMethod, deletePaymentMethod,

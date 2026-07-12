@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     email TEXT,
     name TEXT,
     role TEXT DEFAULT 'cashier' CHECK (role IN ('admin', 'cashier')),
+    is_verified BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -112,8 +113,19 @@ CREATE TABLE IF NOT EXISTS public.otp_codes (
     user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
     otp_code TEXT NOT NULL,          -- Hashed OTP code stored for verification
-    type TEXT CHECK (type IN ('login', 'forgot_password')),
+    type TEXT CHECK (type IN ('login', 'forgot_password', 'signup', 'register')),
     expired_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 9b. OTPS Table (Standard OTP table for Register/Login security)
+CREATE TABLE IF NOT EXISTS public.otps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL,
+    otp TEXT NOT NULL,                -- Hashed OTP code stored for verification
+    type TEXT DEFAULT 'register' CHECK (type IN ('login', 'forgot_password', 'signup', 'register')),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );

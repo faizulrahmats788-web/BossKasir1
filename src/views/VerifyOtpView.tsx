@@ -6,24 +6,25 @@ import { ArrowLeft, ShieldCheck, RefreshCw } from 'lucide-react';
 import { APP_LOGO_URL } from '../constants';
 
 const VerifyOtpView: React.FC = () => {
-  const { loginVerifyOtp, sendOtp, logout, authError } = useApp();
+  const { verifyRegisterOtp, resendRegisterOtp, logout, authError } = useApp();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
-  const [type, setType] = useState<'login' | 'signup'>('login');
+  const [type, setType] = useState<'signup'>('signup');
   const [otp, setOtp] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(60);
+  const [urlSimulatedOtp, setUrlSimulatedOtp] = useState('');
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const emailParam = params.get('email');
     const usernameParam = params.get('username');
-    const typeParam = params.get('type');
+    const simParam = params.get('simulatedOtp');
     if (emailParam) setEmail(emailParam);
     if (usernameParam) setUsername(usernameParam);
-    if (typeParam === 'signup' || typeParam === 'login') setType(typeParam);
+    if (simParam) setUrlSimulatedOtp(simParam);
     
     // Redirect if no email
     if (!emailParam) {
@@ -56,91 +57,14 @@ const VerifyOtpView: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // 1. Verifikasi OTP
-      let success = false;
-      const pwd = sessionStorage.getItem('temp_pwd') || undefined;
-      
-      if (type === 'login') {
-        success = await loginVerifyOtp(username, email, otp, pwd);
-      } else {
-        // Untuk signup, masih pakai Supabase standard OTP verification for signup
-        const { data, error } = await supabase.auth.verifyOtp({
-          email: email,
-          token: otp,
-          type: 'signup'
-        });
-        
-        if (error) {
-          if (error.message.includes("expired")) {
-            throw new Error("Kode OTP telah kedaluwarsa.");
-          } else if (error.message.includes("invalid") || error.message.includes("incorrect")) {
-            throw new Error("Kode OTP tidak valid.");
-          } else {
-            throw new Error("Verifikasi gagal: " + error.message);
-          }
-        }
-        
-        if (!data?.session) {
-          throw new Error("Sesi tidak valid. Silakan login ulang.");
-        }
-        
-        const { error: profileError } = await supabase.from('profiles').upsert({
-          id: data.user!.id,
-          email: data.user!.email,
-          username: username || data.user!.email?.split('@')[0],
-          name: username || data.user!.email?.split('@')[0],
-          role: 'admin'
-        });
-        
-        if (profileError) {
-          console.warn("Profile creation failed", profileError);
-        }
-
-        // Register session on backend so we have a persistent pos_session_token
-        let currentDeviceId = localStorage.getItem('pos_device_id');
-        if (!currentDeviceId) {
-          currentDeviceId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
-          localStorage.setItem('pos_device_id', currentDeviceId);
-        }
-
-        try {
-          const registerSessionRes = await fetch('/api/auth/register-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: data.user!.id,
-              email: data.user!.email,
-              deviceId: currentDeviceId
-            })
-          });
-
-          if (registerSessionRes.ok) {
-            const registerSessionData = await registerSessionRes.json();
-            if (registerSessionData.sessionToken) {
-              localStorage.setItem("pos_session_token", registerSessionData.sessionToken);
-              localStorage.setItem("pos_device_id", currentDeviceId);
-              localStorage.setItem("currentUser", JSON.stringify(data.user));
-              localStorage.setItem("otpVerified", "true");
-            }
-          }
-        } catch (sessionErr) {
-          console.warn("Failed to register session token on backend:", sessionErr);
-        }
-
-        success = true;
-      }
-
-      if (success) {
-        console.log('OTP Verification successful');
-        sessionStorage.removeItem('temp_pwd');
-        setMessage('Verifikasi berhasil! Mengarahkan...');
+      const res = await verifyRegisterOtp(email, otp);
+      if (res.success) {
+        setMessage('Verifikasi berhasil! Akun Anda telah aktif. Mengarahkan ke halaman login...');
         setTimeout(() => {
-          console.log('Redirecting to dashboard');
           window.location.href = '/';
-        }, 1000);
-      } else if (type === 'login') {
-         console.log('OTP Verification failed');
-         setError("Verifikasi OTP gagal. Silakan coba lagi.");
+        }, 2000);
+      } else {
+        setError(res.error || 'Kode OTP salah atau telah kedaluwarsa.');
       }
     } catch (err: any) {
       console.error(err);
@@ -162,46 +86,18 @@ const VerifyOtpView: React.FC = () => {
     setIsLoading(true);
 
     try {
-      let resendError = null;
-      if (type === 'signup') {
-        const { error } = await supabase.auth.resend({
-          type: 'signup',
-          email: email
-        });
-        resendError = error;
+      const res = await resendRegisterOtp(email);
+      if (res.success) {
+        if (res.simulatedOtp) {
+          setUrlSimulatedOtp(res.simulatedOtp);
+          setMessage('Kode OTP baru telah disimulasikan di bawah.');
+        } else {
+          setMessage('Kode OTP baru telah dikirim.');
+        }
+        setResendCooldown(60);
       } else {
-        const pwd = sessionStorage.getItem('temp_pwd');
-        if (!pwd) {
-          throw new Error("Sesi tidak valid untuk kirim ulang OTP. Silakan login ulang.");
-        }
-        
-        const res = await fetch('/api/auth/login-initiate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, email, password: pwd })
-        });
-        
-        const contentType = res.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-          throw new Error("API Backend tidak aktif. Vercel deployment memerlukan Serverless function. Silakan deploy ke Cloud Run.");
-        }
-        
-        if (!res.ok) {
-          let resData;
-          try { resData = await res.json(); } catch(e) {}
-          throw new Error(resData?.error || "Gagal mengirimkan OTP.");
-        }
+        setError(res.error || 'Gagal mengirim ulang OTP.');
       }
-      
-      if (resendError) {
-        if (resendError.message.includes("rate limit") || resendError.message.includes("Too many") || resendError.message.includes("security purposes")) {
-          throw new Error("Terlalu banyak percobaan. Silakan tunggu beberapa menit.");
-        }
-        throw resendError;
-      }
-      
-      setMessage('Kode OTP baru telah dikirim.');
-      setResendCooldown(60);
     } catch (err: any) {
       setError(err.message || 'Gagal mengirim ulang OTP.');
     } finally {
@@ -225,15 +121,33 @@ const VerifyOtpView: React.FC = () => {
 
         <div className="flex flex-col items-center mb-8">
             <div className="w-16 h-16 bg-cream-50 text-white rounded-2xl flex items-center justify-center mb-4 overflow-hidden border border-coffee-100 shadow-inner">
-                <img src={APP_LOGO_URL} alt="Logo" className="w-full h-full object-cover" />
+                <img 
+                  src={APP_LOGO_URL} 
+                  alt="Logo" 
+                  className="w-full h-full object-cover" 
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    e.currentTarget.src = "https://picsum.photos/seed/bosskasir/150/150";
+                  }}
+                />
             </div>
             <h2 className="text-2xl font-black text-coffee-900 tracking-tighter uppercase italic text-center mb-2">
-                {type === 'signup' ? 'Verifikasi Registrasi' : 'Verifikasi Login'}
+                Verifikasi Registrasi
             </h2>
             <p className="text-xs text-coffee-500 font-bold text-center leading-relaxed">
                 Masukkan 6 digit kode OTP yang dikirim ke <span className="text-coffee-800">{email}</span>
             </p>
         </div>
+
+        {urlSimulatedOtp && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold text-center mb-6 space-y-1 shadow-sm">
+            <p className="text-amber-700 uppercase tracking-wider font-extrabold text-[10px]">⚠️ SMTP Email Belum Aktif / Error</p>
+            <p className="text-coffee-600 font-medium text-[11px]">Gunakan kode OTP simulasi di bawah ini untuk memverifikasi akun Anda:</p>
+            <div className="text-xl font-mono font-black tracking-widest text-amber-950 bg-white border border-amber-100 py-2 rounded-xl mt-1 select-all">
+              {urlSimulatedOtp}
+            </div>
+          </div>
+        )}
         
         <form onSubmit={handleVerify} className="space-y-6">
           <div className="space-y-1">
@@ -257,9 +171,17 @@ const VerifyOtpView: React.FC = () => {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-coffee-800 hover:bg-coffee-900 disabled:opacity-50 text-cream-50 py-4 rounded-2xl font-black text-sm tracking-widest transition-all flex items-center justify-center gap-2"
+            className="w-full bg-coffee-800 hover:bg-coffee-900 disabled:opacity-50 text-cream-50 py-4 rounded-2xl font-black text-sm tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg shadow-coffee-800/10 active:scale-95"
           >
             {isLoading ? 'MEMPROSES...' : <><ShieldCheck size={18} /> VERIFIKASI</>}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleBack}
+            className="w-full bg-cream-50 hover:bg-cream-100 border border-coffee-200 text-coffee-850 py-4 rounded-2xl font-black text-sm tracking-widest transition-all flex items-center justify-center gap-2 active:scale-95"
+          >
+            <ArrowLeft size={16} /> KEMBALI KE MENU AWAL
           </button>
         </form>
 

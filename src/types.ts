@@ -8,6 +8,7 @@ export interface User {
   email: string;
   password?: string;
   email_confirmed_at?: string | null;
+  is_verified?: boolean;
 }
 
 export interface Product {
